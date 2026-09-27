@@ -135,3 +135,39 @@ def test_file_write_failure_leaves_memory_unchanged(tmp_path):
     with pytest.raises(OSError):
         log.append(**rec())
     assert len(log) == 0
+
+
+def test_reopening_existing_file_continues_the_chain(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    AuditLog(path).append(**rec(name="first"))
+    reopened = AuditLog(path)
+    assert len(reopened) == 1
+    reopened.append(**rec(name="second"))
+    assert AuditLog.load(path).verify(expected_head=reopened.head)
+
+
+def test_reopening_tampered_file_refuses(tmp_path):
+    path, _ = make_file_log(tmp_path)
+    entries = read_lines(path)
+    entries[0]["effect"] = "deny"
+    write_lines(path, entries)
+    with pytest.raises(DataSecError):
+        AuditLog(path)
+
+
+def test_concurrent_appends_keep_the_chain_intact():
+    import threading
+
+    log = AuditLog()
+
+    def worker():
+        for _ in range(5000):
+            log.append(**rec())
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(log) == 40_000
+    assert log.verify()

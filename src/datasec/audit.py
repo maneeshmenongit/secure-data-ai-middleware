@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,12 @@ class AuditLog:
     def __init__(self, path: str | Path | None = None) -> None:
         self._entries: list[AuditEntry] = []
         self._path = Path(path) if path is not None else None
+        self._lock = threading.Lock()
+        # Resume an existing file so a restart continues the same chain.
+        if self._path is not None and self._path.exists():
+            self._entries = _read_entries(self._path)
+            if not self.verify():
+                raise DataSecError(f"existing audit log {self._path} failed verification")
 
     def append(
         self, *, sink: str, name: str, effect: str, reason: str, rule: str | None,
@@ -57,14 +64,16 @@ class AuditLog:
             "sink": sink, "name": name, "effect": effect, "reason": reason, "rule": rule,
             "trust": trust, "source": source, "labels": sorted(labels), "tally": dict(tally),
         }
-        prev = self.head
-        entry = AuditEntry(**body, prev_hash=prev, hash=entry_hash(prev, body))
-        # Persist first: if the write fails, memory stays consistent with disk.
-        if self._path is not None:
-            with self._path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(asdict(entry), sort_keys=True) + "\n")
-                f.flush()
-        self._entries.append(entry)
+        # Read-head, write, append must be atomic or concurrent guards fork the chain.
+        with self._lock:
+            prev = self.head
+            entry = AuditEntry(**body, prev_hash=prev, hash=entry_hash(prev, body))
+            # Persist first: if the write fails, memory stays consistent with disk.
+            if self._path is not None:
+                with self._path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(asdict(entry), sort_keys=True) + "\n")
+                    f.flush()
+            self._entries.append(entry)
         return entry
 
     @property
@@ -82,15 +91,9 @@ class AuditLog:
 
     @classmethod
     def load(cls, path: str | Path) -> AuditLog:
+        """Read a log for inspection; it may fail verify(). To keep appending, use AuditLog(path)."""
         log = cls()
-        with Path(path).open(encoding="utf-8") as f:
-            for n, line in enumerate(f, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    log._entries.append(AuditEntry(**json.loads(line)))
-                except (json.JSONDecodeError, TypeError) as exc:
-                    raise DataSecError(f"corrupt audit log at line {n}") from exc
+        log._entries = _read_entries(Path(path))
         return log
 
     def __iter__(self) -> Iterator[AuditEntry]:
@@ -98,3 +101,16 @@ class AuditLog:
 
     def __len__(self) -> int:
         return len(self._entries)
+
+
+def _read_entries(path: Path) -> list[AuditEntry]:
+    entries: list[AuditEntry] = []
+    with path.open(encoding="utf-8") as f:
+        for n, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                entries.append(AuditEntry(**json.loads(line)))
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise DataSecError(f"corrupt audit log at line {n}") from exc
+    return entries

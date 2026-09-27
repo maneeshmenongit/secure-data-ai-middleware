@@ -192,3 +192,45 @@ def test_raw_pii_never_reaches_audit_file(tmp_path):
     for s in raw:
         assert s not in text
     assert AuditLog.load(path).verify(expected_head=p.audit.head)
+
+
+def test_rule_labels_reason_and_rule_name_are_redacted_in_audit(tmp_path):
+    from datasec.policy import Decision, Rule, default_rules
+    from datasec.provenance import Provenance, TrustLevel
+
+    path = tmp_path / "audit.jsonl"
+    leaky = Rule("rule for john@example.com",
+                 lambda a: Decision(Effect.DENY, f"blocked {a.name}", "rule for john@example.com"))
+    p = SecurityPipeline(engine=PolicyEngine([*default_rules(), leaky]), audit=AuditLog(path))
+    prov = Provenance(TrustLevel.USER, "s", {"john@example.com"})
+    p.guard(Action("tool:readonly", "email john@example.com", prov), "hi")
+    assert "john@example.com" not in path.read_text()
+
+
+@pytest.mark.parametrize(
+    "action",
+    [None, "llm", __import__("types").SimpleNamespace(sink="llm", name="x", provenance=USER)],
+)
+def test_invalid_action_denied_and_audited(action):
+    p = SecurityPipeline()
+    r = p.guard(action, "jane@example.com")
+    assert not r.allowed and r.payload is None
+    assert r.decision.reason == "invalid action"
+    assert len(p.audit) == 1
+
+
+class NoneEngine(PolicyEngine):
+    def evaluate(self, action):
+        return None
+
+
+def test_engine_returning_garbage_denies():
+    p = SecurityPipeline(engine=NoneEngine())
+    r = p.guard(Action("llm", "chat", SVC), "hi")
+    assert not r.allowed
+    assert r.decision.reason == "policy failed"
+
+
+def test_numeric_card_in_json_body_is_redacted():
+    r = SecurityPipeline().guard(Action("llm", "chat", USER), {"card": 4111111111111111})
+    assert r.payload == {"card": "[CREDIT_CARD]"}

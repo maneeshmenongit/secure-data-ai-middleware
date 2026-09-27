@@ -114,3 +114,49 @@ def test_many_matches_stay_fast():
     start = time.perf_counter()
     assert R.scan(text) == {"EMAIL": 50_000}
     assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "card 4111 1111 1111 1111 123",
+        "4111111111111111 123",
+        "4111-1111-1111-1111-12",
+        "Ref 7 4111 1111 1111 1111",
+    ],
+)
+def test_card_adjacent_to_other_digits_is_redacted(text):
+    res = R.redact(text)
+    assert res.found.get("CREDIT_CARD") == 1
+    assert "4111" not in res.payload
+
+
+@pytest.mark.parametrize(
+    "text,label",
+    [
+        ("123­45­6789", "SSN"),        # soft hyphen
+        ("123‎45‎6789", "SSN"),        # left-to-right mark
+        ("123⁦45-6789", "SSN"),             # bidi isolate
+        ("1͏23-45-6789", "SSN"),            # combining grapheme joiner
+        ("123️-45-6789", "SSN"),            # variation selector
+        ("123–45–6789", "SSN"),        # en-dash separators
+        ("4111–1111–1111–1111", "CREDIT_CARD"),
+        ("555–123–4567", "PHONE"),
+    ],
+)
+def test_invisible_and_dash_characters_do_not_hide_pii(text, label):
+    res = R.redact(f"x {text} y")
+    assert res.found == {label: 1}
+    assert res.payload == f"x [{label}] y"
+
+
+def test_soft_hyphen_in_email_does_not_leak_local_part():
+    assert R.redact("john­.doe@example.com").payload == "[EMAIL]"
+
+
+def test_integer_leaves_and_keys_are_scanned():
+    payload = {"card": 4111111111111111, "ssn": 123456789, "n": 42, 123456789: "k"}
+    assert R.scan(payload) == {"CREDIT_CARD": 1, "SSN": 2}
+    assert R.redact(payload).payload == {
+        "card": "[CREDIT_CARD]", "ssn": "[SSN]", "n": 42, "[SSN]": "k",
+    }

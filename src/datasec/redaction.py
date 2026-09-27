@@ -10,13 +10,30 @@ from typing import Any, Callable, Iterable
 
 from .errors import RedactionError, UnsupportedPayload
 
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
 _SCALARS = (bool, int, float, type(None))
 
 
+class _Fold(dict):
+    """Lazy str.translate table: drop invisible characters, map every dash to '-'."""
+
+    def __missing__(self, cp: int) -> int | str | None:
+        category = unicodedata.category(chr(cp))
+        if category == "Cf" or cp == 0x034F or 0xFE00 <= cp <= 0xFE0F:
+            value: int | str | None = None
+        elif category == "Pd":
+            value = "-"
+        else:
+            value = cp
+        self[cp] = value
+        return value
+
+
+_FOLD = _Fold()
+
+
 def normalize(text: str) -> str:
-    """NFKC-fold look-alike characters and strip zero-width characters."""
-    return unicodedata.normalize("NFKC", text).translate(_ZERO_WIDTH)
+    """NFKC-fold look-alikes, strip invisible format characters, unify dashes."""
+    return unicodedata.normalize("NFKC", text).translate(_FOLD)
 
 
 def luhn_valid(number: str) -> bool:
@@ -54,6 +71,11 @@ DEFAULT_DETECTORS: tuple[Detector, ...] = (
     ),
     Detector("SSN", re.compile(r"(?<!\d)\d{3}[- ]?\d{2}[- ]?\d{4}(?!\d)")),
     Detector("CREDIT_CARD", re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"), luhn_valid),
+    # Exact card layouts, for when the loose match above swallowed a neighbouring
+    # number (CVV, reference) and failed Luhn. Each is linear, like the rest.
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{13,19}(?!\d)"), luhn_valid),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}(?:[ -]\d{4}){3}(?!\d)"), luhn_valid),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}[ -]\d{6}[ -]\d{5}(?!\d)"), luhn_valid),
     Detector(
         "PHONE",
         re.compile(
@@ -90,14 +112,14 @@ class Redactor:
         if isinstance(payload, str):
             return self._redact_text(payload, found)
         if isinstance(payload, _SCALARS):
-            return payload
+            return self._redact_int(payload, found)
         if isinstance(payload, dict):
             out: dict[Any, Any] = {}
             for key, value in payload.items():
                 if isinstance(key, str):
                     new_key = self._redact_text(key, found)
                 elif isinstance(key, _SCALARS):
-                    new_key = key
+                    new_key = self._redact_int(key, found)
                 else:
                     raise UnsupportedPayload(type(key).__name__)
                 if strict_keys and new_key in out:
@@ -109,6 +131,14 @@ class Redactor:
         if isinstance(payload, tuple):
             return tuple(self._walk(v, found, strict_keys=strict_keys) for v in payload)
         raise UnsupportedPayload(type(payload).__name__)
+
+    def _redact_int(self, value: Any, found: Counter[str]) -> Any:
+        """Numeric JSON fields can hold card numbers or SSNs; scan their digits."""
+        if type(value) is not int:
+            return value
+        text = str(value)
+        redacted = self._redact_text(text, found)
+        return value if redacted == text else redacted
 
     def _redact_text(self, text: str, found: Counter[str]) -> str:
         text = normalize(text)

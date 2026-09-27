@@ -90,3 +90,9 @@ def test_raising_rule_denies_without_leaking_message():
 def test_rule_returning_garbage_denies():
     d = PolicyEngine([Rule("bad", lambda a: "allow")]).evaluate(act("llm"))
     assert d == Decision(Effect.DENY, "rule bad returned str", "bad")
+
+
+def test_decision_with_non_effect_denies():
+    bad = Rule("bad", lambda a: Decision("deny", "x", "bad"))
+    d = PolicyEngine([*default_rules(), bad]).evaluate(act("llm"))
+    assert d == Decision(Effect.DENY, "rule bad returned invalid effect", "bad")

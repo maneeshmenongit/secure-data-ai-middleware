@@ -58,6 +58,8 @@ class PolicyEngine:
                 continue
             if not isinstance(d, Decision):
                 d = Decision(Effect.DENY, f"rule {rule.name} returned {type(d).__name__}", rule.name)
+            elif not isinstance(d.effect, Effect):
+                d = Decision(Effect.DENY, f"rule {rule.name} returned invalid effect", rule.name)
             decisions.append(d)
         for effect in _PRECEDENCE:
             for d in decisions:

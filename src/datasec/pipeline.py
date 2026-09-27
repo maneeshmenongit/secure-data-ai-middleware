@@ -36,7 +36,10 @@ class SecurityPipeline:
         self.audit = audit if audit is not None else AuditLog()
 
     def guard(self, action: Action, payload: Any) -> GuardResult:
-        decision, out, action, tally = self._decide(action, payload)
+        if isinstance(action, Action):
+            decision, out, action, tally = self._decide(action, payload)
+        else:
+            decision, out, action, tally = _deny("invalid action"), None, Action("", "", None), {}
         self._record(action, decision, tally)
         return GuardResult(decision.effect is not Effect.DENY, out, decision)
 
@@ -55,6 +58,8 @@ class SecurityPipeline:
             action = replace(action, provenance=action.provenance.with_labels("pii"))
         try:
             decision = self.engine.evaluate(action)
+            if not isinstance(decision, Decision) or not isinstance(decision.effect, Effect):
+                raise TypeError("engine returned an invalid decision")
         except Exception:
             return _deny("policy failed"), None, action, tally
         if decision.effect is Effect.DENY:
@@ -73,18 +78,18 @@ class SecurityPipeline:
                 sink=self._safe(action.sink),
                 name=self._safe(action.name),
                 effect=decision.effect.value,
-                reason=decision.reason,
-                rule=decision.rule,
+                reason=self._safe(decision.reason),
+                rule=self._safe(decision.rule) if decision.rule is not None else None,
                 trust=prov.trust.name if prov else "UNKNOWN",
                 source=self._safe(prov.source) if prov else "",
-                labels=sorted(prov.labels) if prov else [],
+                labels=sorted(self._safe(label) for label in prov.labels) if prov else [],
                 tally=tally,
             )
         except Exception as exc:
             raise DataSecError("audit append failed") from exc
 
     def _safe(self, value: Any) -> str:
-        """Caller-supplied metadata can carry PII too; redact before logging."""
+        """Caller-supplied metadata (names, labels, custom rule text) can carry PII; redact it."""
         try:
             return self.redactor.redact(str(value)).payload
         except Exception:
