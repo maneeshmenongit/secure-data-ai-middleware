@@ -1,5 +1,12 @@
 """Every attack the suite knows about."""
 
-from redteam.attacks import exfiltration, failclosed, taint
+from redteam.attacks import audit_tamper, evasion, exfiltration, failclosed, resource, taint
 
-ATTACKS = [*taint.ATTACKS, *exfiltration.ATTACKS, *failclosed.ATTACKS]
+ATTACKS = [
+    *taint.ATTACKS,
+    *evasion.ATTACKS,
+    *exfiltration.ATTACKS,
+    *audit_tamper.ATTACKS,
+    *failclosed.ATTACKS,
+    *resource.ATTACKS,
+]
