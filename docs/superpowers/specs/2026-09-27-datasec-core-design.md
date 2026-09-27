@@ -36,10 +36,10 @@ Implements DESIGN.md §4 signatures exactly; additions below are marked **(new)*
 ### 3.2 `redaction.py`
 - Detectors (fixed order): `EMAIL`, `SSN`, `CREDIT_CARD`, `PHONE`, `IPV4`. SSN and CREDIT_CARD run before PHONE so they claim digit runs first.
 - `CREDIT_CARD` matches 13–19 digits with optional space/dash separators **and must pass a Luhn check**.
-- **(new) Normalization:** before scanning, each string is NFKC-normalized and zero-width characters (U+200B–U+200D, U+2060, U+FEFF) are stripped. `redact` returns the redacted *normalized* text.
+- **(new) Normalization:** before scanning, each string is NFKC-normalized and invisible characters (Unicode category Cf, U+034F, U+FE00–FE0F) are stripped and every dash (category Pd) becomes `-`. `redact` returns the redacted *normalized* text.
 - `Redactor.scan(payload) -> dict[str, int]`: empty dict when nothing is found.
 - `Redactor.redact(payload) -> RedactionResult(payload, found)`: same shape as the input, with each span replaced by `[LABEL]`.
-- **(new) Payload walking:** a payload is a `str`, or a `dict` / `list` / `tuple` nested to any depth. String leaves **and dict keys** are scanned and redacted. `int`, `float`, `bool` and `None` leaves pass through unchanged. Any other leaf type (e.g. `bytes`) raises `UnsupportedPayload`. If redacting keys makes two keys collide, `redact` raises `RedactionError`.
+- **(new) Payload walking:** a payload is a `str`, or a `dict` / `list` / `tuple` nested to any depth. String leaves **and dict keys** are scanned and redacted. `int` leaves and keys are scanned as their decimal string and replaced by the redacted string on a hit (final-review ruling: numeric card/SSN fields in JSON bodies). `float`, `bool` and `None` pass through unchanged. Any other leaf type (e.g. `bytes`) raises `UnsupportedPayload`. If redacting keys makes two keys collide, `redact` raises `RedactionError`.
 - Regexes must be linear-time (no nested quantifiers) — see redteam R6.
 
 ### 3.3 `policy.py`
