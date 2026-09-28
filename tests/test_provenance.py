@@ -80,3 +80,24 @@ def test_boundary_constructors_set_trust():
     assert untrusted(1, source="s").provenance.trust is TrustLevel.UNTRUSTED
     assert from_user(1, source="s").provenance.trust is TrustLevel.USER
     assert internal(1, source="s").provenance.trust is TrustLevel.INTERNAL
+
+
+def test_labels_are_case_and_whitespace_insensitive():
+    p = Provenance(TrustLevel.USER, "u", {"PII", " Secret "})
+    assert p.labels == frozenset({"pii", "secret"})
+    assert p.has("Pii") and p.has(" SECRET")
+
+
+def test_with_labels_normalizes():
+    p = Provenance(TrustLevel.USER, "u").with_labels("SECRET")
+    assert p.labels == frozenset({"secret"})
+
+
+def test_non_string_label_rejected():
+    with pytest.raises(TypeError):
+        Provenance(TrustLevel.USER, "u", [1, "a"])
+
+
+def test_empty_label_rejected():
+    with pytest.raises(ValueError):
+        Provenance(TrustLevel.USER, "u", {"  "})

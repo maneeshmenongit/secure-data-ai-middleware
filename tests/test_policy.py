@@ -34,15 +34,35 @@ def test_empty_engine_allows():
 def test_untrusted_to_privileged_denied(sink):
     d = ENGINE.evaluate(act(sink, TrustLevel.UNTRUSTED))
     assert d.effect is Effect.DENY
-    assert d.rule == "no_untrusted_to_privileged"
+    assert d.rule == "no_low_trust_to_privileged"
 
 
 def test_untrusted_to_readonly_tool_allowed():
     assert ENGINE.evaluate(act("tool:readonly", TrustLevel.UNTRUSTED)).effect is Effect.ALLOW
 
 
-def test_external_to_privileged_allowed():
-    assert ENGINE.evaluate(act("tool:privileged", TrustLevel.EXTERNAL)).effect is Effect.ALLOW
+@pytest.mark.parametrize("sink", sorted(PRIVILEGED))
+def test_external_to_privileged_denied(sink):
+    d = ENGINE.evaluate(act(sink, TrustLevel.EXTERNAL))
+    assert d.effect is Effect.DENY
+    assert d.rule == "no_low_trust_to_privileged"
+    assert d.reason == f"external data cannot reach {sink}"
+
+
+def test_user_to_privileged_allowed():
+    assert ENGINE.evaluate(act("tool:privileged", TrustLevel.USER)).effect is Effect.ALLOW
+
+
+def test_allowlisted_external_source_reaches_privileged():
+    engine = PolicyEngine(default_rules(privileged_source_allowlist={"api:stripe-verified"}))
+    action = Action("tool:privileged", "pay", Provenance(TrustLevel.EXTERNAL, "api:stripe-verified"))
+    assert engine.evaluate(action).effect is Effect.ALLOW
+
+
+def test_allowlist_never_exempts_untrusted():
+    engine = PolicyEngine(default_rules(privileged_source_allowlist={"web:evil"}))
+    action = Action("tool:privileged", "pay", Provenance(TrustLevel.UNTRUSTED, "web:evil"))
+    assert engine.evaluate(action).effect is Effect.DENY
 
 
 @pytest.mark.parametrize("sink", sorted(EGRESS))
@@ -58,7 +78,10 @@ def test_secret_to_memory_write_allowed():
 
 @pytest.mark.parametrize("sink", sorted(EGRESS))
 def test_pii_on_egress_redacted(sink):
-    d = ENGINE.evaluate(act(sink, TrustLevel.USER, ("pii",)))
+    # third_party must name an allowlisted destination; llm/http:response need none.
+    engine = PolicyEngine(default_rules(egress_allowlist={"api.example"}))
+    dest = "api.example" if sink == "third_party" else None
+    d = engine.evaluate(Action(sink, "op", Provenance(TrustLevel.USER, "test", ("pii",)), destination=dest))
     assert d.effect is Effect.REDACT
     assert d.rule == "redact_pii_on_egress"
 
@@ -96,3 +119,35 @@ def test_decision_with_non_effect_denies():
     bad = Rule("bad", lambda a: Decision("deny", "x", "bad"))
     d = PolicyEngine([*default_rules(), bad]).evaluate(act("llm"))
     assert d == Decision(Effect.DENY, "rule bad returned invalid effect", "bad")
+
+
+def egress(destination, allow=()):
+    engine = PolicyEngine(default_rules(egress_allowlist=allow))
+    return engine.evaluate(
+        Action("third_party", "post", Provenance(TrustLevel.INTERNAL, "svc"), destination=destination)
+    )
+
+
+def test_unlisted_destination_denied():
+    d = egress("evil.example")
+    assert d.effect is Effect.DENY
+    assert d.rule == "egress_allowlist"
+
+
+def test_listed_destination_allowed():
+    assert egress("api.stripe.com", allow={"api.stripe.com"}).effect is Effect.ALLOW
+
+
+def test_destination_is_normalized():
+    assert egress(" API.Stripe.com ", allow={"api.stripe.com"}).effect is Effect.ALLOW
+
+
+def test_non_string_destination_denies():
+    d = egress(["api.stripe.com"], allow={"api.stripe.com"})
+    assert d.effect is Effect.DENY
+
+
+def test_sink_without_destination_unaffected():
+    engine = PolicyEngine(default_rules())
+    action = Action("llm", "chat", Provenance(TrustLevel.INTERNAL, "svc"))
+    assert engine.evaluate(action).effect is Effect.ALLOW

@@ -8,7 +8,7 @@ from typing import Any, Callable
 from datasec.pipeline import GuardResult, SecurityPipeline
 from datasec.policy import Action, Effect
 
-DEFENDED = frozenset({"blocked", "redacted", "detected", "bounded"})
+DEFENDED = frozenset({"blocked", "redacted", "detected", "bounded", "encrypted"})
 EXPECTATIONS = DEFENDED | {"known_gap"}
 
 
@@ -28,10 +28,10 @@ class Attack:
 
 def guard(
     sink: str, provenance: Any, payload: Any, name: str = "attack",
-    pipeline: SecurityPipeline | None = None,
+    pipeline: SecurityPipeline | None = None, **action_fields: Any,
 ) -> GuardResult:
     p = pipeline if pipeline is not None else SecurityPipeline()
-    return p.guard(Action(sink, name, provenance), payload)
+    return p.guard(Action(sink, name, provenance, **action_fields), payload)
 
 
 def outcome(result: GuardResult) -> str:

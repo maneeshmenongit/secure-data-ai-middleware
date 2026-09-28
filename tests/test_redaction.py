@@ -154,9 +154,36 @@ def test_soft_hyphen_in_email_does_not_leak_local_part():
     assert R.redact("john­.doe@example.com").payload == "[EMAIL]"
 
 
-def test_integer_leaves_and_keys_are_scanned():
+def test_integers_pass_through_by_default():
+    payload = {"order_id": 123456789, "card": 4111111111111111, 123456789: "k"}
+    assert R.scan(payload) == {}
+    assert R.redact(payload).payload == payload
+
+
+def test_integer_scanning_is_opt_in():
+    r = Redactor(scan_integers=True)
     payload = {"card": 4111111111111111, "ssn": 123456789, "n": 42, 123456789: "k"}
-    assert R.scan(payload) == {"CREDIT_CARD": 1, "SSN": 2}
-    assert R.redact(payload).payload == {
+    assert r.scan(payload) == {"CREDIT_CARD": 1, "SSN": 2}
+    assert r.redact(payload).payload == {
         "card": "[CREDIT_CARD]", "ssn": "[SSN]", "n": 42, "[SSN]": "k",
     }
+
+
+def test_per_call_flag_enables_integer_scanning():
+    assert R.scan({"c": 4111111111111111}, scan_integers=True) == {"CREDIT_CARD": 1}
+
+
+def test_integer_fields_limit_scope():
+    r = Redactor(scan_integers=True, integer_fields={"SSN"})
+    payload = {"ssn": 123456789, "order_id": 123456789, "nested": {"ssn": [123456789]}, 123456789: "k"}
+    assert r.redact(payload).payload == {
+        "ssn": "[SSN]", "order_id": 123456789, "nested": {"ssn": ["[SSN]"]}, 123456789: "k",
+    }
+
+
+def test_ssn_with_dots_detected():
+    assert R.redact("x 123.45.6789 y").payload == "x [SSN] y"
+
+
+def test_decimal_number_is_not_an_ssn():
+    assert R.scan("lat 123.456789") == {}

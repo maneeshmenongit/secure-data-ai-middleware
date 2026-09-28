@@ -51,7 +51,7 @@ def test_untrusted_to_privileged_denied():
     r = p.guard(Action("tool:privileged", "pay", WEB), "wire money")
     assert not r.allowed
     assert r.payload is None
-    assert r.decision.rule == "no_untrusted_to_privileged"
+    assert r.decision.rule == "no_low_trust_to_privileged"
     assert last(p).effect == "deny"
 
 
@@ -95,7 +95,7 @@ def test_deeply_nested_payload_denied():
     p = SecurityPipeline()
     r = p.guard(Action("llm", "chat", USER), payload)
     assert not r.allowed
-    assert r.decision.reason == "unsupported payload"
+    assert r.decision.reason == "payload too deep"
 
 
 def test_redacted_key_collision_denied():
@@ -231,6 +231,151 @@ def test_engine_returning_garbage_denies():
     assert r.decision.reason == "policy failed"
 
 
-def test_numeric_card_in_json_body_is_redacted():
-    r = SecurityPipeline().guard(Action("llm", "chat", USER), {"card": 4111111111111111})
+def test_numeric_card_redacted_when_action_opts_in():
+    r = SecurityPipeline().guard(
+        Action("llm", "chat", USER, scan_integers=True), {"card": 4111111111111111}
+    )
     assert r.payload == {"card": "[CREDIT_CARD]"}
+
+
+def test_numeric_id_not_corrupted_by_default():
+    payload = {"order_id": 4111111111111111}
+    r = SecurityPipeline().guard(Action("llm", "chat", USER), payload)
+    assert r.decision.effect is Effect.ALLOW
+    assert r.payload is payload
+
+
+def test_action_default_does_not_disable_pipeline_integer_scanning():
+    p = SecurityPipeline(redactor=Redactor(scan_integers=True))
+    r = p.guard(Action("llm", "chat", USER), {"card": 4111111111111111})
+    assert r.payload == {"card": "[CREDIT_CARD]"}
+
+
+def test_mixed_case_secret_label_still_denied_on_egress():
+    prov = internal("", source="vault", labels="Secret").provenance
+    r = SecurityPipeline().guard(Action("llm", "chat", prov), "sk-test-FAKE")
+    assert not r.allowed
+    assert r.decision.rule == "never_leak_secrets"
+
+
+def test_mixed_case_pii_label_still_redacts_on_egress():
+    from datasec.provenance import Provenance, TrustLevel
+
+    prov = Provenance(TrustLevel.USER, "u", {"PII"})
+    r = SecurityPipeline().guard(Action("llm", "chat", prov), "Jane Doe, Elm St")
+    assert r.decision.rule == "redact_pii_on_egress"
+
+
+def test_payload_over_byte_cap_denied_and_audited():
+    p = SecurityPipeline(max_bytes=10)
+    assert p.guard(Action("llm", "chat", SVC), "x" * 10).allowed
+    r = p.guard(Action("llm", "chat", SVC), "x" * 11)
+    assert not r.allowed
+    assert r.decision.reason == "payload too large"
+    assert last(p).effect == "deny"
+
+
+def test_bytes_are_counted_as_utf8():
+    p = SecurityPipeline(max_bytes=4)
+    assert p.guard(Action("llm", "chat", SVC), "éé").allowed
+    assert p.guard(Action("llm", "chat", SVC), "ééé").decision.reason == "payload too large"
+
+
+def test_nesting_past_max_depth_denied():
+    p = SecurityPipeline(max_depth=3)
+    assert p.guard(Action("llm", "chat", SVC), [[["x"]]]).allowed
+    assert p.guard(Action("llm", "chat", SVC), [[[["x"]]]]).decision.reason == "payload too deep"
+
+
+def test_self_referencing_payload_denied():
+    loop = []
+    loop.append(loop)
+    r = SecurityPipeline().guard(Action("llm", "chat", SVC), loop)
+    assert not r.allowed
+    assert r.decision.reason == "payload too deep"
+
+
+@pytest.mark.parametrize("kwargs", [{"max_bytes": 0}, {"max_depth": 0}])
+def test_invalid_caps_rejected(kwargs):
+    with pytest.raises(ValueError):
+        SecurityPipeline(**kwargs)
+
+
+def _secret(value="sk-test-FAKE-123"):
+    return internal(value, source="vault", labels="secret")
+
+
+def test_secret_memory_write_is_sealed():
+    from datasec.crypto import LocalKeyProvider, Sealed, unseal
+
+    kp = LocalKeyProvider()
+    p = SecurityPipeline(key_provider=kp)
+    s = _secret()
+    r = p.guard(Action("memory:write", "remember", s.provenance), {"key": s.value})
+    assert r.allowed
+    assert isinstance(r.payload, Sealed)
+    assert "sk-test-FAKE-123" not in r.payload.token
+    assert unseal(kp, r.payload) == {"key": "sk-test-FAKE-123"}
+    assert last(p).extra == {"encryption": "key:k1"}
+
+
+def test_secret_memory_write_without_provider_degrades_and_is_audited(caplog):
+    p = SecurityPipeline()
+    s = _secret()
+    with caplog.at_level("WARNING", logger="datasec"):
+        r1 = p.guard(Action("memory:write", "remember", s.provenance), s.value)
+        p.guard(Action("memory:write", "remember", s.provenance), s.value)
+    assert r1.allowed and r1.payload == "sk-test-FAKE-123"
+    assert last(p).extra == {"encryption": "unavailable"}
+    assert sum("no KeyProvider" in m for m in caplog.messages) == 1
+
+
+def test_non_secret_memory_write_not_sealed():
+    from datasec.crypto import LocalKeyProvider
+
+    p = SecurityPipeline(key_provider=LocalKeyProvider())
+    r = p.guard(Action("memory:write", "remember", SVC), "plain note")
+    assert r.payload == "plain note"
+    assert last(p).extra == {}
+
+
+def test_encryption_failure_denies():
+    class BrokenProvider:
+        def current_key_id(self):
+            return "k1"
+
+        def encrypt(self, plaintext, *, key_id=None):
+            raise RuntimeError("kms down")
+
+        def decrypt(self, ciphertext, *, key_id):
+            raise RuntimeError("kms down")
+
+    p = SecurityPipeline(key_provider=BrokenProvider())
+    r = p.guard(Action("memory:write", "remember", _secret().provenance), "sk-test-FAKE-123")
+    assert not r.allowed and r.payload is None
+    assert r.decision.reason == "encryption failed"
+    assert last(p).extra == {"encryption": "failed"}
+
+
+def test_shared_reference_payload_is_bounded():
+    import time
+
+    node = []
+    for _ in range(4):
+        node = [node] * 1000
+    start = time.perf_counter()
+    r = SecurityPipeline().guard(Action("llm", "chat", SVC), node)
+    assert time.perf_counter() - start < 2.0
+    assert r.decision.reason == "payload too large"
+
+
+@pytest.mark.parametrize("payload", [b"x" * 2_000_000, 10 ** 1_200_000], ids=["bytes", "huge_int"])
+def test_bytes_and_huge_ints_count_toward_cap(payload):
+    r = SecurityPipeline().guard(Action("llm", "chat", SVC), payload)
+    assert r.decision.reason == "payload too large"
+
+
+def test_third_party_without_destination_denied():
+    r = SecurityPipeline().guard(Action("third_party", "post", SVC), "report")
+    assert not r.allowed
+    assert r.decision.rule == "egress_allowlist"

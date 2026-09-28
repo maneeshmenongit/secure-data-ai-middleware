@@ -4,31 +4,50 @@ import json
 import tempfile
 from pathlib import Path
 
-from datasec.audit import GENESIS, AuditLog, entry_hash
+from datasec.audit import GENESIS, AuditLog, SignedCheckpoint, entry_hash
+from datasec.crypto import LocalKeyProvider
 from datasec.errors import DataSecError
 from datasec.pipeline import SecurityPipeline
-from datasec.provenance import from_user, internal, untrusted
+from datasec.policy import Action
+from datasec.provenance import Provenance, TrustLevel, from_user, internal, untrusted
 from redteam.common import Attack, guard
 
 
 def _body(entry):
-    return {k: v for k, v in entry.items() if k not in ("prev_hash", "hash")}
+    body = {k: v for k, v in entry.items() if k not in ("prev_hash", "hash")}
+    if not body.get("extra"):
+        body.pop("extra", None)
+    return body
 
 
-def _tamper(mutate, *, pin_head):
-    """Record three decisions, let `mutate` rewrite the file, then verify it."""
+def _tamper(mutate, *, pin_head=False, checkpoint=False, forge_checkpoint=None):
+    """Record three decisions, let `mutate` rewrite the file, then verify it.
+
+    pin_head: verify against a head stored out-of-band by hand.
+    checkpoint: run with a signed checkpoint and verify against it.
+    forge_checkpoint: optional fn(checkpoint_dict, entries) -> dict that rewrites the checkpoint file.
+    """
     def run():
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            p = SecurityPipeline(audit=AuditLog(path))
+            path, cp_path = Path(tmp) / "audit.jsonl", Path(tmp) / "audit.checkpoint"
+            signer = LocalKeyProvider() if checkpoint else None
+            log = AuditLog(path, signer=signer, checkpoint_path=cp_path if checkpoint else None)
+            p = SecurityPipeline(audit=log)
             guard("tool:privileged", untrusted("", source="web").provenance, "wire money", pipeline=p)
             guard("llm", from_user("", source="u").provenance, "mail jane@example.com", pipeline=p)
             guard("llm", internal("", source="svc").provenance, "hello", pipeline=p)
-            head = p.audit.head  # what an out-of-band anchor would have stored
+            head = log.head  # what an out-of-band anchor would have stored
+            log.close()
             entries = mutate([json.loads(line) for line in path.read_text().splitlines()])
             path.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in entries))
+            if forge_checkpoint is not None:
+                cp_path.write_text(json.dumps(forge_checkpoint(json.loads(cp_path.read_text()), entries)))
             try:
-                ok = AuditLog.load(path).verify(expected_head=head if pin_head else None)
+                loaded = AuditLog.load(path)
+                if checkpoint:
+                    ok = loaded.verify(checkpoint=SignedCheckpoint.read(cp_path), verifier=signer)
+                else:
+                    ok = loaded.verify(expected_head=head if pin_head else None)
             except DataSecError:
                 return "detected"
             return "undetected" if ok else "detected"
@@ -75,6 +94,72 @@ def _drop_field(es):
     return es
 
 
+def _point_checkpoint_at_forgery(cp, entries):
+    cp["head"] = entries[-1]["hash"]
+    cp["count"] = len(entries)
+    return cp
+
+
+
+def _record_three(p):
+    guard("tool:privileged", untrusted("", source="web").provenance, "wire money", pipeline=p)
+    guard("llm", from_user("", source="u").provenance, "mail jane@example.com", pipeline=p)
+    guard("llm", internal("", source="svc").provenance, "hello", pipeline=p)
+
+
+def _startup(mutate, cp_action):
+    """Tamper, then restart the log the way an operator would: the constructor, same key."""
+    def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            path, cp_path = Path(tmp) / "audit.jsonl", Path(tmp) / "audit.checkpoint"
+            signer = LocalKeyProvider()
+            log = AuditLog(path, signer=signer, checkpoint_path=cp_path)
+            p = SecurityPipeline(audit=log, key_provider=signer)
+            _record_three(p)
+            log.close()
+            entries = mutate([json.loads(line) for line in path.read_text().splitlines()])
+            path.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in entries))
+            cp_action(cp_path, entries, signer)
+            try:
+                AuditLog(path, signer=signer, checkpoint_path=cp_path)
+            except DataSecError:
+                return "detected"
+            return "undetected"
+    return run
+
+
+def _delete_checkpoint(cp_path, entries, signer):
+    cp_path.unlink()
+
+
+def _forge_via_seal_oracle(cp_path, entries, signer):
+    """Get an app pipeline sharing the key to encrypt chosen claims as a 'secret' memory write."""
+    claims = {"head": entries[-1]["hash"], "count": len(entries), "ts": "2026-01-01T00:00:00+00:00"}
+    prov = Provenance(TrustLevel.USER, "user:1", {"secret"})
+    sealed = SecurityPipeline(key_provider=signer).guard(Action("memory:write", "note", prov), claims).payload
+    cp_path.write_text(json.dumps({**claims, "key_id": sealed.key_id, "token": sealed.token}))
+
+
+def _replay_old_checkpoint():
+    with tempfile.TemporaryDirectory() as tmp:
+        path, cp_path = Path(tmp) / "audit.jsonl", Path(tmp) / "audit.checkpoint"
+        signer = LocalKeyProvider()
+        log = AuditLog(path, signer=signer, checkpoint_path=cp_path)
+        p = SecurityPipeline(audit=log)
+        _record_three(p)
+        old = cp_path.with_name("old.checkpoint")
+        log.checkpoint(signer).save(old)
+        guard("llm", internal("", source="svc").provenance, "later", pipeline=p)
+        log.close()
+        path.write_text("".join(path.read_text().splitlines(keepends=True)[:3]))
+        old.replace(cp_path)
+        try:
+            AuditLog(path, signer=signer, checkpoint_path=cp_path)
+        except DataSecError:
+            return "detected"
+        return "undetected"
+
+
 ATTACKS = [
     Attack("R4.1", "audit_tampering", "n/a", "flip a DENY to allow in place",
            _tamper(_flip_denial, pin_head=False), "detected"),
@@ -90,8 +175,21 @@ ATTACKS = [
            _tamper(_truncate_tail, pin_head=True), "detected"),
     Attack("R4.7", "audit_tampering", "n/a", "remove a field from an entry",
            _tamper(_drop_field, pin_head=False), "detected"),
-    Attack("R4g.1", "audit_tampering", "n/a", "truncate the tail with no pinned head",
-           _tamper(_truncate_tail, pin_head=False), "known_gap"),
-    Attack("R4g.2", "audit_tampering", "n/a", "rewrite the whole chain with no pinned head",
-           _tamper(_rewrite_chain, pin_head=False), "known_gap"),
+    Attack("R4.8", "audit_tampering", "n/a", "truncate the tail, signed checkpoint configured",
+           _tamper(_truncate_tail, checkpoint=True), "detected"),
+    Attack("R4.9", "audit_tampering", "n/a", "rewrite the whole chain, signed checkpoint configured",
+           _tamper(_rewrite_chain, checkpoint=True), "detected"),
+    Attack("R4.10", "audit_tampering", "n/a", "rewrite the chain and repoint the checkpoint file at it",
+           _tamper(_rewrite_chain, checkpoint=True, forge_checkpoint=_point_checkpoint_at_forgery),
+           "detected"),
+    Attack("R4g.1", "audit_tampering", "n/a", "truncate the tail with no checkpoint or pinned head",
+           _tamper(_truncate_tail), "known_gap"),
+    Attack("R4g.2", "audit_tampering", "n/a", "rewrite the whole chain with no checkpoint or pinned head",
+           _tamper(_rewrite_chain), "known_gap"),
+    Attack("R4.11", "audit_tampering", "n/a", "truncate the tail and delete the checkpoint file, then restart",
+           _startup(_truncate_tail, _delete_checkpoint), "detected"),
+    Attack("R4.12", "audit_tampering", "n/a", "forge a checkpoint by getting the pipeline to seal chosen claims",
+           _startup(_rewrite_chain, _forge_via_seal_oracle), "detected"),
+    Attack("R4g.3", "audit_tampering", "n/a", "replay an older genuine checkpoint after truncating the tail",
+           _replay_old_checkpoint, "known_gap"),
 ]

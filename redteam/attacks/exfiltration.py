@@ -30,6 +30,38 @@ def _secret_with_pii():
     return outcome(guard("llm", key.provenance, key.value))
 
 
+def _mixed_case_secret_label():
+    key = internal(API_KEY, source="vault:stripe", labels=("Secret",))
+    return outcome(guard("llm", key.provenance, key.value))
+
+
+def _secret_to_unlisted_host():
+    key = _key()
+    return outcome(guard("third_party", key.provenance, key.value, destination="paste.evil.example"))
+
+
+def _clean_data_to_unlisted_host():
+    report = internal("Quarterly totals: 42 orders", source="svc:reports")
+    return outcome(guard("third_party", report.provenance, report.value, destination="paste.evil.example"))
+
+
+def _secret_at_rest():
+    from datasec.crypto import LocalKeyProvider
+    from datasec.pipeline import SecurityPipeline
+
+    key = _key()
+    p = SecurityPipeline(key_provider=LocalKeyProvider())
+    stored = guard("memory:write", key.provenance, {"stripe": key.value}, pipeline=p).payload
+    if stored is None:
+        return "blocked"
+    return "leaked" if API_KEY in repr(stored) else "encrypted"
+
+
+def _third_party_without_destination():
+    report = internal("Quarterly totals: 42 orders", source="svc:reports")
+    return outcome(guard("third_party", report.provenance, report.value))
+
+
 ATTACKS = [
     *[
         Attack(f"R3.{i}", "secret_exfiltration", "LLM02",
@@ -42,4 +74,19 @@ ATTACKS = [
     Attack("R3.5", "secret_exfiltration", "LLM02",
            "pair a secret with PII hoping REDACT outranks DENY",
            _secret_with_pii, "blocked"),
+    Attack("R3.6", "secret_exfiltration", "LLM02",
+           "label the secret 'Secret' hoping the case-sensitive rule misses it",
+           _mixed_case_secret_label, "blocked"),
+    Attack("R3.7", "secret_exfiltration", "LLM02",
+           "send a secret to a host that is not on the egress allowlist",
+           _secret_to_unlisted_host, "blocked"),
+    Attack("R3.8", "secret_exfiltration", "LLM02",
+           "send innocuous-looking data to an unknown host (content checks pass)",
+           _clean_data_to_unlisted_host, "blocked"),
+    Attack("R3.9", "secret_exfiltration", "LLM02",
+           "read a secret straight out of the memory store at rest",
+           _secret_at_rest, "encrypted"),
+    Attack("R3.10", "secret_exfiltration", "LLM02",
+           "call a third-party sink without naming a destination to skip the allowlist",
+           _third_party_without_destination, "blocked"),
 ]
