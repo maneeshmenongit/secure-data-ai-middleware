@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -37,10 +37,13 @@ class AuditEntry:
     tally: dict[str, int]
     prev_hash: str
     hash: str
+    extra: dict[str, str] = field(default_factory=dict)
 
     def body(self) -> dict:
         data = asdict(self)
         del data["prev_hash"], data["hash"]
+        if not data["extra"]:
+            del data["extra"]  # keeps pre-Phase-2 entries hashing exactly as before
         return data
 
 
@@ -58,12 +61,15 @@ class AuditLog:
     def append(
         self, *, sink: str, name: str, effect: str, reason: str, rule: str | None,
         trust: str, source: str, labels: Iterable[str], tally: dict[str, int],
+        extra: dict[str, str] | None = None,
     ) -> AuditEntry:
         body = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "sink": sink, "name": name, "effect": effect, "reason": reason, "rule": rule,
             "trust": trust, "source": source, "labels": sorted(labels), "tally": dict(tally),
         }
+        if extra:
+            body["extra"] = dict(extra)
         # Read-head, write, append must be atomic or concurrent guards fork the chain.
         with self._lock:
             prev = self.head

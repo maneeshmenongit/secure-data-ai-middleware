@@ -12,7 +12,10 @@ from redteam.common import Attack, guard
 
 
 def _body(entry):
-    return {k: v for k, v in entry.items() if k not in ("prev_hash", "hash")}
+    body = {k: v for k, v in entry.items() if k not in ("prev_hash", "hash")}
+    if not body.get("extra"):
+        body.pop("extra", None)
+    return body
 
 
 def _tamper(mutate, *, pin_head):

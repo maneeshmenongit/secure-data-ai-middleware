@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
 from .audit import AuditLog
+from .crypto import KeyProvider, seal
 from .errors import DataSecError, UnsupportedPayload
 from .policy import KNOWN_SINKS, Action, Decision, Effect, PolicyEngine, default_rules
 from .provenance import Provenance
 from .redaction import Redactor
+
+
+log = logging.getLogger("datasec")
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ class SecurityPipeline:
         *,
         max_bytes: int = 1_000_000,
         max_depth: int = 200,
+        key_provider: KeyProvider | None = None,
     ) -> None:
         if max_bytes < 1 or max_depth < 1:
             raise ValueError("max_bytes and max_depth must be >= 1")
@@ -62,14 +68,37 @@ class SecurityPipeline:
         self.audit = audit if audit is not None else AuditLog()
         self.max_bytes = max_bytes
         self.max_depth = max_depth
+        self.key_provider = key_provider
+        self._warned_no_key = False
 
     def guard(self, action: Action, payload: Any) -> GuardResult:
         if isinstance(action, Action):
             decision, out, action, tally = self._decide(action, payload)
         else:
             decision, out, action, tally = _deny("invalid action"), None, Action("", "", None), {}
-        self._record(action, decision, tally)
+        extra: dict[str, str] = {}
+        if (
+            decision.effect is not Effect.DENY
+            and action.sink == "memory:write"
+            and isinstance(action.provenance, Provenance)
+            and action.provenance.has("secret")
+        ):
+            out, decision, extra = self._seal(out, decision)
+        self._record(action, decision, tally, extra)
         return GuardResult(decision.effect is not Effect.DENY, out, decision)
+
+    def _seal(self, value: Any, decision: Decision) -> tuple[Any, Decision, dict[str, str]]:
+        """Secrets that legitimately land in memory are encrypted at rest."""
+        if self.key_provider is None:
+            if not self._warned_no_key:
+                log.warning("no KeyProvider configured: secret memory writes are stored unencrypted")
+                self._warned_no_key = True
+            return value, decision, {"encryption": "unavailable"}
+        try:
+            sealed = seal(self.key_provider, value)
+        except Exception:
+            return None, _deny("encryption failed", decision.rule), {"encryption": "failed"}
+        return sealed, decision, {"encryption": f"key:{sealed.key_id}"}
 
     def _decide(self, action: Action, payload: Any) -> tuple[Decision, Any, Action, dict[str, int]]:
         if not isinstance(action.sink, str) or action.sink not in KNOWN_SINKS:
@@ -104,7 +133,7 @@ class SecurityPipeline:
                 return _deny("redaction failed", decision.rule), None, action, tally
         return decision, payload, action, tally
 
-    def _record(self, action: Action, decision: Decision, tally: dict[str, int]) -> None:
+    def _record(self, action: Action, decision: Decision, tally: dict[str, int], extra: dict[str, str]) -> None:
         prov = action.provenance if isinstance(action.provenance, Provenance) else None
         try:
             self.audit.append(
@@ -117,6 +146,7 @@ class SecurityPipeline:
                 source=self._safe(prov.source) if prov else "",
                 labels=sorted(self._safe(label) for label in prov.labels) if prov else [],
                 tally=tally,
+                extra=extra,
             )
         except Exception as exc:
             raise DataSecError("audit append failed") from exc

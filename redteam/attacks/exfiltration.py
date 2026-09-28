@@ -45,6 +45,18 @@ def _clean_data_to_unlisted_host():
     return outcome(guard("third_party", report.provenance, report.value, destination="paste.evil.example"))
 
 
+def _secret_at_rest():
+    from datasec.crypto import LocalKeyProvider
+    from datasec.pipeline import SecurityPipeline
+
+    key = _key()
+    p = SecurityPipeline(key_provider=LocalKeyProvider())
+    stored = guard("memory:write", key.provenance, {"stripe": key.value}, pipeline=p).payload
+    if stored is None:
+        return "blocked"
+    return "leaked" if API_KEY in repr(stored) else "encrypted"
+
+
 ATTACKS = [
     *[
         Attack(f"R3.{i}", "secret_exfiltration", "LLM02",
@@ -66,4 +78,7 @@ ATTACKS = [
     Attack("R3.8", "secret_exfiltration", "LLM02",
            "send innocuous-looking data to an unknown host (content checks pass)",
            _clean_data_to_unlisted_host, "blocked"),
+    Attack("R3.9", "secret_exfiltration", "LLM02",
+           "read a secret straight out of the memory store at rest",
+           _secret_at_rest, "encrypted"),
 ]

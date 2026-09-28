@@ -8,7 +8,7 @@ from typing import Any, Callable
 from datasec.pipeline import GuardResult, SecurityPipeline
 from datasec.policy import Action, Effect
 
-DEFENDED = frozenset({"blocked", "redacted", "detected", "bounded"})
+DEFENDED = frozenset({"blocked", "redacted", "detected", "bounded", "encrypted"})
 EXPECTATIONS = DEFENDED | {"known_gap"}
 
 

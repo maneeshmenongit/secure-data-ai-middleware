@@ -299,3 +299,59 @@ def test_self_referencing_payload_denied():
 def test_invalid_caps_rejected(kwargs):
     with pytest.raises(ValueError):
         SecurityPipeline(**kwargs)
+
+
+def _secret(value="sk-test-FAKE-123"):
+    return internal(value, source="vault", labels="secret")
+
+
+def test_secret_memory_write_is_sealed():
+    from datasec.crypto import LocalKeyProvider, Sealed, unseal
+
+    kp = LocalKeyProvider()
+    p = SecurityPipeline(key_provider=kp)
+    s = _secret()
+    r = p.guard(Action("memory:write", "remember", s.provenance), {"key": s.value})
+    assert r.allowed
+    assert isinstance(r.payload, Sealed)
+    assert "sk-test-FAKE-123" not in r.payload.token
+    assert unseal(kp, r.payload) == {"key": "sk-test-FAKE-123"}
+    assert last(p).extra == {"encryption": "key:k1"}
+
+
+def test_secret_memory_write_without_provider_degrades_and_is_audited(caplog):
+    p = SecurityPipeline()
+    s = _secret()
+    with caplog.at_level("WARNING", logger="datasec"):
+        r1 = p.guard(Action("memory:write", "remember", s.provenance), s.value)
+        p.guard(Action("memory:write", "remember", s.provenance), s.value)
+    assert r1.allowed and r1.payload == "sk-test-FAKE-123"
+    assert last(p).extra == {"encryption": "unavailable"}
+    assert sum("no KeyProvider" in m for m in caplog.messages) == 1
+
+
+def test_non_secret_memory_write_not_sealed():
+    from datasec.crypto import LocalKeyProvider
+
+    p = SecurityPipeline(key_provider=LocalKeyProvider())
+    r = p.guard(Action("memory:write", "remember", SVC), "plain note")
+    assert r.payload == "plain note"
+    assert last(p).extra == {}
+
+
+def test_encryption_failure_denies():
+    class BrokenProvider:
+        def current_key_id(self):
+            return "k1"
+
+        def encrypt(self, plaintext, *, key_id=None):
+            raise RuntimeError("kms down")
+
+        def decrypt(self, ciphertext, *, key_id):
+            raise RuntimeError("kms down")
+
+    p = SecurityPipeline(key_provider=BrokenProvider())
+    r = p.guard(Action("memory:write", "remember", _secret().provenance), "sk-test-FAKE-123")
+    assert not r.allowed and r.payload is None
+    assert r.decision.reason == "encryption failed"
+    assert last(p).extra == {"encryption": "failed"}

@@ -171,3 +171,21 @@ def test_concurrent_appends_keep_the_chain_intact():
         t.join()
     assert len(log) == 40_000
     assert log.verify()
+
+
+def test_extra_is_hashed_when_present(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    AuditLog(path).append(**rec(), extra={"encryption": "key:k1"})
+    entries = read_lines(path)
+    entries[0]["extra"] = {"encryption": "unavailable"}
+    write_lines(path, entries)
+    assert not AuditLog.load(path).verify()
+
+
+def test_logs_without_extra_field_still_verify(tmp_path):
+    path, log = make_file_log(tmp_path)
+    entries = read_lines(path)
+    for e in entries:
+        del e["extra"]  # simulate a Phase 1 log file
+    write_lines(path, entries)
+    assert AuditLog.load(path).verify(expected_head=log.head)
