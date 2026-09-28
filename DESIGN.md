@@ -1,7 +1,9 @@
 # DataSec Middleware — Design Spec
 
-**Status:** design, ready to implement · **Author:** Maneesh (Wise World LLC) · **Date:** 2026-09-27
+**Status:** Phase 1 built & reviewed; Phase 2 specified (see companion `datasec-phase2-design.md`) · **Author:** Maneesh (Wise World LLC) · **Date:** 2026-09-27 (rev. after Phase 1 report)
 **Intended builder:** Claude Code (this doc is the spec; it writes the code)
+
+> **Revision note (post-Phase 1):** §5, §8 and §10 updated to record what Phase 1 actually built, the deviations the build made, and the three design-thread decisions (audit-head storage, scoped integer scanning, EXTERNAL-trust policy). A separate black-box attack plan (`datasec-webapp-attack-plan.md`) covers the test web app, and Phase 2 has its own spec.
 
 ---
 
@@ -169,6 +171,10 @@ Each module has a narrow, stable interface. Claude Code should implement to thes
 
 Rules are pure predicates and pluggable, so the harness can add adversarial rules and you can grow the catalog without touching the engine.
 
+**How the `pii` label gets applied (Phase 1 deviation, kept).** The original design assumed something upstream labels a value `pii`. Nothing did. The Phase 1 pipeline now scans the payload itself at the sink and adds the `pii` label before the rules run, so PII is caught regardless of origin — including PII in *LLM output* on its way back. This is a strict improvement and is the intended behavior going forward.
+
+**Open policy question — EXTERNAL trust to privileged sinks (decision, see §10.5).** `no_untrusted_to_privileged` fires on `trust == UNTRUSTED` (level 0). That leaves `EXTERNAL` (level 1: third-party API and tool responses) *allowed* to reach `tool:privileged`, `third_party`, and `memory:write`. For an agent, tool/third-party output is a primary indirect-prompt-injection vector. Resolution in §10.5: treat EXTERNAL as privileged-blocked by default.
+
 ---
 
 ## 6. Via integration (thin adapters — phase 3)
@@ -200,10 +206,11 @@ Reference frameworks: OWASP Top 10 for LLM Applications, OWASP API Security Top 
 
 ## 8. Build phases
 
-1. **Core, standalone** — provenance, redaction, policy, audit, pipeline + `demo.py` (4 scenarios: untrusted→privileged blocked; user PII→LLM redacted; clean allow; audit tamper detection) + unit tests.
-2. **Harden the core** — grow rule catalog, add field-level encryption for `secret`-labelled memory (KMS-backed; local key for dev), add egress allowlist.
-3. **Via adapters** — `asgi.py`, `langgraph.py`; wire taint rules into Via's spec.
-4. **Harness + integration loop** — stand up the red-team harness, run against Via-lite, feed findings back.
+1. **✅ Core, standalone (done)** — provenance, redaction, policy, audit, pipeline + `demo.py` + unit tests + an in-repo, in-process red-team seed suite. Phase 1 report: 50 attacks (44 defended, 6 documented known gaps, 0 unexpected); whole-branch review found 1 critical + 7 important, all fixed with regression tests. `demo.main()` returns a dict rather than the `list[GuardResult]` this doc first specified (scenario 4 yields a bool) — accepted.
+2. **⏳ Test web app + minimal ASGI adapter (in progress)** — a deliberately app for black-box testing of *both* surfaces (data-security controls and classic web vulns). This pulls a thin slice of the Phase 3 ASGI adapter forward as a **test rig**; it is not the Via integration and its shortcuts must not leak into the real adapter. Attack plan: `datasec-webapp-attack-plan.md`.
+3. **Harden the core (Phase 2)** — `KeyProvider` + field-level encryption for `secret` memory, egress allowlist, Presidio behind the `Redactor` interface, payload size cap, case-insensitive labels, scoped integer scanning, EXTERNAL-trust policy, audit-head checkpointing. Full spec: `datasec-phase2-design.md`.
+4. **Via adapters (Phase 3)** — real `asgi.py`, `langgraph.py`; wire taint rules into Via's spec.
+5. **Harness + integration loop** — stand up the out-of-band red-team harness (§7 — distinct from the in-process seed suite), run against Via-lite, feed findings back.
 
 ---
 
@@ -216,9 +223,14 @@ Reference frameworks: OWASP Top 10 for LLM Applications, OWASP API Security Top 
 
 ---
 
-## 10. Open decisions for the builder
+## 10. Decisions
 
-- **Encryption backend** for `secret` memory in phase 2: local Fernet for dev vs. cloud KMS abstraction from day one? (Recommend a `KeyProvider` interface with a `LocalKeyProvider` now, KMS later.)
-- **Credit-card detector** should add a **Luhn check** to cut false positives before phase 2.
-- **Provenance persistence** — how trust labels survive a round-trip through Via's memory store (serialization format). Depends on Via's memory schema; resolve when the adapter lands.
-- **Redactor reversibility** — do any sinks need tokenization (reversible) vs. plain redaction (one-way)? Default one-way; revisit if a downstream tool needs the original.
+Resolved items are marked **[resolved]**; the rest stay open with an owner.
+
+- **10.1 Encryption backend — [resolved].** `KeyProvider` interface with a `LocalKeyProvider` (Fernet) for dev now; a KMS-backed provider later behind the same interface. Detail in the Phase 2 spec.
+- **10.2 Credit-card Luhn check — [resolved, shipped in Phase 1].** Plus exact card-layout detectors after the whole-branch review found a card+CVV run reaching the LLM in plaintext.
+- **10.3 Redactor reversibility — [resolved].** One-way redaction only. Revisit only if a downstream tool provably needs the original value; a reversible tokenizing provider would be a separate `Redactor` implementation.
+- **10.4 Audit-head storage — [resolved].** The hash chain alone proves entries were *edited*, not that the whole log was *replaced or truncated*. Store `AuditLog.head` out-of-band. Proportionate choice for a solo sandbox: a periodic **signed checkpoint** (head + timestamp, signed with a `KeyProvider` key) written to a separate location, plus the current head in a second store (DB row or restricted file). No external log service yet. Specified in Phase 2.
+- **10.5 EXTERNAL-trust to privileged sinks — [resolved].** Treat `EXTERNAL` (level 1) as privileged-blocked, same as `UNTRUSTED`: change `no_untrusted_to_privileged` to fire on `trust <= EXTERNAL` for `PRIVILEGED` sinks (rename to `no_low_trust_to_privileged`). Rationale: tool/third-party output is a primary indirect-injection vector for an agent. Add a red-team case asserting EXTERNAL→privileged is now blocked. If a specific trusted third party must reach a privileged sink, allowlist that `source`, don't lower the bar globally.
+- **10.6 Integer scanning — [resolved, scoped — overrides the Phase 1 blanket behavior].** Phase 1 scans JSON integers for SSN/card patterns and redacts them. Kept, but **scoped**: do not blanket-redact integers, because it corrupts legitimate numeric IDs (order numbers, primary keys, epoch timestamps). Default: scan **strings only**. Integer scanning becomes **opt-in per sink or per field** (e.g. a `scan_integers` flag on the `Action`, or a field allowlist). Rationale: for data-engineering payloads the false-positive/corruption cost of blanket integer redaction outweighs the rare integer-encoded-PII case. Specified in Phase 2.
+- **10.7 Provenance persistence — [open, owner: Phase 3].** How trust labels survive a round-trip through Via's memory store (serialization format). Depends on Via's memory schema; resolve when the adapter lands.
