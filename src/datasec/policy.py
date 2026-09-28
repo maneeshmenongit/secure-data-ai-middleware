@@ -102,7 +102,12 @@ def _egress_allowlist(allowlist: Iterable[str]) -> Callable[[Action], Decision |
     allowed = frozenset(host.strip().lower() for host in allowlist)
 
     def check(action: Action) -> Decision | None:
-        if action.sink not in EGRESS or action.destination is None:
+        if action.sink not in EGRESS:
+            return None
+        if action.destination is None:
+            # llm / http:response go to fixed, configured endpoints; a third party must be named.
+            if action.sink == "third_party":
+                return Decision(Effect.DENY, "third_party egress needs a destination", "egress_allowlist")
             return None
         # A non-str destination raises here; the engine turns that into DENY.
         if action.destination.strip().lower() in allowed:

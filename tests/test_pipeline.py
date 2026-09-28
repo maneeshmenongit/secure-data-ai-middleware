@@ -355,3 +355,27 @@ def test_encryption_failure_denies():
     assert not r.allowed and r.payload is None
     assert r.decision.reason == "encryption failed"
     assert last(p).extra == {"encryption": "failed"}
+
+
+def test_shared_reference_payload_is_bounded():
+    import time
+
+    node = []
+    for _ in range(4):
+        node = [node] * 1000
+    start = time.perf_counter()
+    r = SecurityPipeline().guard(Action("llm", "chat", SVC), node)
+    assert time.perf_counter() - start < 2.0
+    assert r.decision.reason == "payload too large"
+
+
+@pytest.mark.parametrize("payload", [b"x" * 2_000_000, 10 ** 1_200_000], ids=["bytes", "huge_int"])
+def test_bytes_and_huge_ints_count_toward_cap(payload):
+    r = SecurityPipeline().guard(Action("llm", "chat", SVC), payload)
+    assert r.decision.reason == "payload too large"
+
+
+def test_third_party_without_destination_denied():
+    r = SecurityPipeline().guard(Action("third_party", "post", SVC), "report")
+    assert not r.allowed
+    assert r.decision.rule == "egress_allowlist"

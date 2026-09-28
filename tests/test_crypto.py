@@ -43,3 +43,10 @@ def test_missing_cryptography_is_a_clear_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "cryptography.fernet", None)
     with pytest.raises(DataSecError, match="datasec\\[crypto\\]"):
         LocalKeyProvider()
+
+
+def test_checkpoint_token_cannot_be_unsealed_as_a_value():
+    p = LocalKeyProvider()
+    raw = p.encrypt(b'{"a":1}', key_id=p.current_key_id()).decode("ascii")
+    with pytest.raises(DataSecError):
+        unseal(p, Sealed(p.current_key_id(), raw))

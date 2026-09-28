@@ -14,6 +14,7 @@ from typing import Any, Iterable, Iterator
 from .errors import DataSecError
 
 GENESIS = "0" * 64
+CHECKPOINT_TAG = b"datasec-checkpoint/v1\n"
 
 
 def _canonical(body: dict) -> str:
@@ -65,7 +66,10 @@ class SignedCheckpoint:
 
     def is_valid(self, verifier: Any) -> bool:
         try:
-            signed = json.loads(verifier.decrypt(self.token.encode("ascii"), key_id=self.key_id))
+            plaintext = verifier.decrypt(self.token.encode("ascii"), key_id=self.key_id)
+            if not plaintext.startswith(CHECKPOINT_TAG):
+                return False
+            signed = json.loads(plaintext[len(CHECKPOINT_TAG):])
         except Exception:
             return False
         return signed == self.claims()
@@ -95,6 +99,8 @@ class AuditLog:
     ) -> None:
         if (signer is None) != (checkpoint_path is None):
             raise ValueError("signer and checkpoint_path must be given together")
+        if signer is not None and path is None:
+            raise ValueError("checkpointing needs a file-backed log (path)")
         self._entries: list[AuditEntry] = []
         self._path = Path(path) if path is not None else None
         self._lock = threading.RLock()
@@ -106,10 +112,17 @@ class AuditLog:
         if self._path is not None and self._path.exists():
             self._entries = _read_entries(self._path)
         cp = None
-        if self._checkpoint_path is not None and self._checkpoint_path.exists():
-            cp = SignedCheckpoint.read(self._checkpoint_path)
+        if self._checkpoint_path is not None:
+            if self._checkpoint_path.exists():
+                cp = SignedCheckpoint.read(self._checkpoint_path)
+            elif self._entries:
+                # A checkpointed log always has a checkpoint (one is written at creation),
+                # so a missing file means it was removed: fail closed.
+                raise DataSecError(f"audit checkpoint {self._checkpoint_path} is missing")
         if not self.verify(checkpoint=cp, verifier=signer):
             raise DataSecError(f"existing audit log {self._path} failed verification")
+        if self._checkpoint_path is not None and cp is None:
+            self.checkpoint(signer).save(self._checkpoint_path)
 
     def append(
         self, *, sink: str, name: str, effect: str, reason: str, rule: str | None,
@@ -145,7 +158,8 @@ class AuditLog:
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
             key_id = signer.current_key_id()
-            token = signer.encrypt(_canonical(claims).encode("utf-8"), key_id=key_id).decode("ascii")
+            plaintext = CHECKPOINT_TAG + _canonical(claims).encode("utf-8")
+            token = signer.encrypt(plaintext, key_id=key_id).decode("ascii")
             return SignedCheckpoint(**claims, key_id=key_id, token=token)
 
     def close(self) -> None:

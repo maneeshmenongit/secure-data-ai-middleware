@@ -41,6 +41,13 @@ def _self_reference():
     return outcome(guard("llm", CLEAN.provenance, loop))
 
 
+def _shared_reference_blowup():
+    node = []
+    for _ in range(4):
+        node = [node] * 1000  # 10^12 paths through 4,000 real objects
+    return outcome(guard("llm", CLEAN.provenance, node))
+
+
 ATTACKS = [
     Attack("R5.1", "fail_closed", "LLM06", "upper-case sink 'LLM' to dodge egress rules", _sink("LLM"), "blocked"),
     Attack("R5.2", "fail_closed", "LLM06", "whitespace-padded sink ' llm'", _sink(" llm"), "blocked"),
@@ -51,4 +58,6 @@ ATTACKS = [
     Attack("R5.7", "fail_closed", "LLM06", "action with no provenance at all", _missing_provenance, "blocked"),
     Attack("R5.8", "fail_closed", "LLM10", "self-referencing payload to loop the scanner forever",
            _self_reference, "blocked"),
+    Attack("R5.9", "fail_closed", "LLM10", "shared-reference payload whose walk explodes combinatorially",
+           _shared_reference_blowup, "blocked"),
 ]

@@ -8,6 +8,10 @@ from typing import Any, Protocol
 
 from .errors import DataSecError
 
+# Every plaintext is tagged with its purpose, so one kind of ciphertext can never be
+# passed off as another (e.g. a sealed memory value as an audit checkpoint).
+SEALED_TAG = b"datasec-sealed/v1\n"
+
 
 class KeyProvider(Protocol):
     def encrypt(self, plaintext: bytes, *, key_id: str | None = None) -> bytes: ...
@@ -66,7 +70,7 @@ class Sealed:
 def seal(provider: KeyProvider, value: Any) -> Sealed:
     """JSON-encode then encrypt. Tuples come back as lists and int dict keys as str."""
     key_id = provider.current_key_id()
-    plaintext = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    plaintext = SEALED_TAG + json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return Sealed(key_id, provider.encrypt(plaintext, key_id=key_id).decode("ascii"))
 
 
@@ -77,4 +81,6 @@ def unseal(provider: KeyProvider, sealed: Sealed) -> Any:
         raise
     except Exception as exc:
         raise DataSecError("decryption failed") from exc
-    return json.loads(plaintext)
+    if not plaintext.startswith(SEALED_TAG):
+        raise DataSecError("not a sealed value")
+    return json.loads(plaintext[len(SEALED_TAG):])

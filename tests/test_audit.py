@@ -327,3 +327,37 @@ def test_concurrent_appends_with_checkpoints(tmp_path):
         t.join()
     log.close()
     assert AuditLog.load(path).verify(checkpoint=SignedCheckpoint.read(cp_path), verifier=signer)
+
+
+def test_missing_checkpoint_for_existing_log_refuses(tmp_path):
+    path, cp_path, signer, _ = checkpointed(tmp_path)
+    write_lines(path, read_lines(path)[:-1])
+    cp_path.unlink()
+    with pytest.raises(DataSecError):
+        AuditLog(path, signer=signer, checkpoint_path=cp_path)
+
+
+def test_new_log_writes_initial_checkpoint(tmp_path):
+    from datasec.audit import SignedCheckpoint
+    from datasec.crypto import LocalKeyProvider
+
+    cp_path = tmp_path / "audit.checkpoint"
+    AuditLog(tmp_path / "audit.jsonl", signer=LocalKeyProvider(), checkpoint_path=cp_path)
+    assert SignedCheckpoint.read(cp_path).count == 0
+
+
+def test_checkpoint_requires_a_file_backed_log(tmp_path):
+    from datasec.crypto import LocalKeyProvider
+
+    with pytest.raises(ValueError):
+        AuditLog(None, signer=LocalKeyProvider(), checkpoint_path=tmp_path / "cp")
+
+
+def test_sealed_value_cannot_be_passed_off_as_checkpoint(tmp_path):
+    from datasec.audit import SignedCheckpoint
+    from datasec.crypto import seal
+
+    path, cp_path, signer, log = checkpointed(tmp_path)
+    cp = SignedCheckpoint.read(cp_path)
+    forged = seal(signer, cp.claims())  # same key, same canonical JSON
+    assert not SignedCheckpoint(cp.head, cp.count, cp.ts, forged.key_id, forged.token).is_valid(signer)

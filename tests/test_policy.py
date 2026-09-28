@@ -78,7 +78,10 @@ def test_secret_to_memory_write_allowed():
 
 @pytest.mark.parametrize("sink", sorted(EGRESS))
 def test_pii_on_egress_redacted(sink):
-    d = ENGINE.evaluate(act(sink, TrustLevel.USER, ("pii",)))
+    # third_party must name an allowlisted destination; llm/http:response need none.
+    engine = PolicyEngine(default_rules(egress_allowlist={"api.example"}))
+    dest = "api.example" if sink == "third_party" else None
+    d = engine.evaluate(Action(sink, "op", Provenance(TrustLevel.USER, "test", ("pii",)), destination=dest))
     assert d.effect is Effect.REDACT
     assert d.rule == "redact_pii_on_egress"
 

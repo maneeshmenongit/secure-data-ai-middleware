@@ -28,12 +28,17 @@ result.payload   # 'Email me at [EMAIL]'
 ## Configuration (Phase 2)
 
 ```python
+import os
+
 from datasec.audit import AuditLog
 from datasec.crypto import LocalKeyProvider          # pip install 'datasec[crypto]'
 from datasec.pipeline import SecurityPipeline
 from datasec.policy import PolicyEngine, default_rules
 
-keys = LocalKeyProvider()
+# Key material must outlive the process: a fresh random key on every start makes old
+# checkpoints and sealed data unreadable, and AuditLog will (correctly) refuse to start.
+# Generate once: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+keys = LocalKeyProvider({"k1": os.environb[b"DATASEC_KEY_K1"]})
 pipeline = SecurityPipeline(
     engine=PolicyEngine(default_rules(
         egress_allowlist={"api.stripe.com"},              # empty = deny every named destination
@@ -47,7 +52,8 @@ pipeline = SecurityPipeline(
 # Action(..., scan_integers=True)            opts a call into integer PII scanning
 ```
 
-Call `pipeline.audit.close()` on shutdown to write the final signed checkpoint.
+Call `pipeline.audit.close()` on shutdown to write the final signed checkpoint. Entries appended
+after the last checkpoint are protected only by the chain until the next one is written.
 
 ## Red-team suite
 
@@ -58,3 +64,4 @@ fixing one fails the build until its label is updated. Current known gaps:
 - Hand-built `Provenance(TRUSTED, ...)` for untrusted data (Python can't prevent it).
 - PII written in words or split across list items (regex limit; Presidio later).
 - Audit tail truncation / full-chain rewrite **when no signed checkpoint (or pinned head) is configured**.
+- Replaying an older genuine checkpoint after truncating the tail (needs a monotonic anchor outside the attacker's reach).

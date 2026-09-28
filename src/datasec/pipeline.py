@@ -29,17 +29,25 @@ def _deny(reason: str, rule: str | None = None) -> Decision:
 
 
 def _over_cap(payload: Any, max_bytes: int, max_depth: int) -> str | None:
-    """Size and depth check before any detector runs. Iterative, so no recursion limit,
-    and depth-bounded, so a self-referencing payload stops instead of looping."""
+    """Size and depth check before any detector runs. Iterative, so no recursion limit;
+    depth-bounded, so a self-referencing payload stops; and every node is charged
+    (containers per child), so a shared-reference DAG can't make the walk explode."""
     size = 0
     stack: list[tuple[Any, int]] = [(payload, 0)]
     while stack:
         item, depth = stack.pop()
         if isinstance(item, str):
             size += len(item.encode("utf-8", "surrogatepass"))
+        elif isinstance(item, (bytes, bytearray)):
+            size += len(item)
+        elif isinstance(item, int) and not isinstance(item, bool):
+            size += item.bit_length() // 3 + 1  # ~decimal digits, without str() on huge ints
         elif isinstance(item, (dict, list, tuple)):
             if depth + 1 > max_depth:
                 return "payload too deep"
+            size += 2 + len(item)  # brackets + separators; bounds the children we push
+            if size > max_bytes:
+                return "payload too large"
             children = [c for kv in item.items() for c in kv] if isinstance(item, dict) else item
             stack.extend((child, depth + 1) for child in children)
         else:

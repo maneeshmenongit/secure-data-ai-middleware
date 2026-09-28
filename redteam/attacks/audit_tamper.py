@@ -8,7 +8,8 @@ from datasec.audit import GENESIS, AuditLog, SignedCheckpoint, entry_hash
 from datasec.crypto import LocalKeyProvider
 from datasec.errors import DataSecError
 from datasec.pipeline import SecurityPipeline
-from datasec.provenance import from_user, internal, untrusted
+from datasec.policy import Action
+from datasec.provenance import Provenance, TrustLevel, from_user, internal, untrusted
 from redteam.common import Attack, guard
 
 
@@ -99,6 +100,66 @@ def _point_checkpoint_at_forgery(cp, entries):
     return cp
 
 
+
+def _record_three(p):
+    guard("tool:privileged", untrusted("", source="web").provenance, "wire money", pipeline=p)
+    guard("llm", from_user("", source="u").provenance, "mail jane@example.com", pipeline=p)
+    guard("llm", internal("", source="svc").provenance, "hello", pipeline=p)
+
+
+def _startup(mutate, cp_action):
+    """Tamper, then restart the log the way an operator would: the constructor, same key."""
+    def run():
+        with tempfile.TemporaryDirectory() as tmp:
+            path, cp_path = Path(tmp) / "audit.jsonl", Path(tmp) / "audit.checkpoint"
+            signer = LocalKeyProvider()
+            log = AuditLog(path, signer=signer, checkpoint_path=cp_path)
+            p = SecurityPipeline(audit=log, key_provider=signer)
+            _record_three(p)
+            log.close()
+            entries = mutate([json.loads(line) for line in path.read_text().splitlines()])
+            path.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in entries))
+            cp_action(cp_path, entries, signer)
+            try:
+                AuditLog(path, signer=signer, checkpoint_path=cp_path)
+            except DataSecError:
+                return "detected"
+            return "undetected"
+    return run
+
+
+def _delete_checkpoint(cp_path, entries, signer):
+    cp_path.unlink()
+
+
+def _forge_via_seal_oracle(cp_path, entries, signer):
+    """Get an app pipeline sharing the key to encrypt chosen claims as a 'secret' memory write."""
+    claims = {"head": entries[-1]["hash"], "count": len(entries), "ts": "2026-01-01T00:00:00+00:00"}
+    prov = Provenance(TrustLevel.USER, "user:1", {"secret"})
+    sealed = SecurityPipeline(key_provider=signer).guard(Action("memory:write", "note", prov), claims).payload
+    cp_path.write_text(json.dumps({**claims, "key_id": sealed.key_id, "token": sealed.token}))
+
+
+def _replay_old_checkpoint():
+    with tempfile.TemporaryDirectory() as tmp:
+        path, cp_path = Path(tmp) / "audit.jsonl", Path(tmp) / "audit.checkpoint"
+        signer = LocalKeyProvider()
+        log = AuditLog(path, signer=signer, checkpoint_path=cp_path)
+        p = SecurityPipeline(audit=log)
+        _record_three(p)
+        old = cp_path.with_name("old.checkpoint")
+        log.checkpoint(signer).save(old)
+        guard("llm", internal("", source="svc").provenance, "later", pipeline=p)
+        log.close()
+        path.write_text("".join(path.read_text().splitlines(keepends=True)[:3]))
+        old.replace(cp_path)
+        try:
+            AuditLog(path, signer=signer, checkpoint_path=cp_path)
+        except DataSecError:
+            return "detected"
+        return "undetected"
+
+
 ATTACKS = [
     Attack("R4.1", "audit_tampering", "n/a", "flip a DENY to allow in place",
            _tamper(_flip_denial, pin_head=False), "detected"),
@@ -125,4 +186,10 @@ ATTACKS = [
            _tamper(_truncate_tail), "known_gap"),
     Attack("R4g.2", "audit_tampering", "n/a", "rewrite the whole chain with no checkpoint or pinned head",
            _tamper(_rewrite_chain), "known_gap"),
+    Attack("R4.11", "audit_tampering", "n/a", "truncate the tail and delete the checkpoint file, then restart",
+           _startup(_truncate_tail, _delete_checkpoint), "detected"),
+    Attack("R4.12", "audit_tampering", "n/a", "forge a checkpoint by getting the pipeline to seal chosen claims",
+           _startup(_rewrite_chain, _forge_via_seal_oracle), "detected"),
+    Attack("R4g.3", "audit_tampering", "n/a", "replay an older genuine checkpoint after truncating the tail",
+           _replay_old_checkpoint, "known_gap"),
 ]
