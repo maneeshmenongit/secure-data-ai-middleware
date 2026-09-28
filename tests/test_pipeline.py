@@ -231,8 +231,23 @@ def test_engine_returning_garbage_denies():
     assert r.decision.reason == "policy failed"
 
 
-def test_numeric_card_in_json_body_is_redacted():
-    r = SecurityPipeline().guard(Action("llm", "chat", USER), {"card": 4111111111111111})
+def test_numeric_card_redacted_when_action_opts_in():
+    r = SecurityPipeline().guard(
+        Action("llm", "chat", USER, scan_integers=True), {"card": 4111111111111111}
+    )
+    assert r.payload == {"card": "[CREDIT_CARD]"}
+
+
+def test_numeric_id_not_corrupted_by_default():
+    payload = {"order_id": 4111111111111111}
+    r = SecurityPipeline().guard(Action("llm", "chat", USER), payload)
+    assert r.decision.effect is Effect.ALLOW
+    assert r.payload is payload
+
+
+def test_action_default_does_not_disable_pipeline_integer_scanning():
+    p = SecurityPipeline(redactor=Redactor(scan_integers=True))
+    r = p.guard(Action("llm", "chat", USER), {"card": 4111111111111111})
     assert r.payload == {"card": "[CREDIT_CARD]"}
 
 

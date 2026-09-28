@@ -31,6 +31,7 @@ class Action:
     name: str
     provenance: Provenance
     destination: str | None = None
+    scan_integers: bool = False
 
 
 @dataclass(frozen=True)

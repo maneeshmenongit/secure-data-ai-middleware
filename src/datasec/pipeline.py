@@ -48,8 +48,10 @@ class SecurityPipeline:
             return _deny("unknown sink"), None, action, {}
         if not isinstance(action.provenance, Provenance):
             return _deny("missing provenance"), None, action, {}
+        # Only pass the flag when set, so custom redactors with the Phase 1 signature still work.
+        ints = {"scan_integers": True} if action.scan_integers else {}
         try:
-            tally = self.redactor.scan(payload)
+            tally = self.redactor.scan(payload, **ints)
         except (UnsupportedPayload, RecursionError):
             return _deny("unsupported payload"), None, action, {}
         except Exception:
@@ -66,7 +68,7 @@ class SecurityPipeline:
             return decision, None, action, tally
         if decision.effect is Effect.REDACT:
             try:
-                return decision, self.redactor.redact(payload).payload, action, tally
+                return decision, self.redactor.redact(payload, **ints).payload, action, tally
             except Exception:
                 return _deny("redaction failed", decision.rule), None, action, tally
         return decision, payload, action, tally

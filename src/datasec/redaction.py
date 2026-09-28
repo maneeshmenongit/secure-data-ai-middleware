@@ -69,7 +69,8 @@ DEFAULT_DETECTORS: tuple[Detector, ...] = (
             r"@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}"
         ),
     ),
-    Detector("SSN", re.compile(r"(?<!\d)\d{3}[- ]?\d{2}[- ]?\d{4}(?!\d)")),
+    # Dots only as a matched pair (123.45.6789), so decimals like 123.456789 don't match.
+    Detector("SSN", re.compile(r"(?<!\d)\d{3}(?:[- ]?\d{2}[- ]?|\.\d{2}\.)\d{4}(?!\d)")),
     Detector("CREDIT_CARD", re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"), luhn_valid),
     # Exact card layouts, for when the loose match above swallowed a neighbouring
     # number (CVV, reference) and failed Luhn. Each is linear, like the rest.
@@ -93,44 +94,68 @@ class RedactionResult:
 
 
 class Redactor:
-    def __init__(self, detectors: Iterable[Detector] = DEFAULT_DETECTORS) -> None:
+    def __init__(
+        self,
+        detectors: Iterable[Detector] = DEFAULT_DETECTORS,
+        *,
+        scan_integers: bool = False,
+        integer_fields: Iterable[str] | None = None,
+    ) -> None:
         self.detectors = tuple(detectors)
+        self.scan_integers = scan_integers
+        self.integer_fields = (
+            None if integer_fields is None else frozenset(f.strip().lower() for f in integer_fields)
+        )
 
-    def scan(self, payload: Any) -> dict[str, int]:
+    def scan(self, payload: Any, *, scan_integers: bool | None = None) -> dict[str, int]:
         """Count PII findings without producing a redacted copy."""
         found: Counter[str] = Counter()
-        self._walk(payload, found, strict_keys=False)
+        self._walk(payload, found, strict_keys=False, ints=self._ints(scan_integers))
         return dict(found)
 
-    def redact(self, payload: Any) -> RedactionResult:
+    def redact(self, payload: Any, *, scan_integers: bool | None = None) -> RedactionResult:
         """Return a same-shaped copy with every finding replaced by [LABEL]."""
         found: Counter[str] = Counter()
-        out = self._walk(payload, found, strict_keys=True)
+        out = self._walk(payload, found, strict_keys=True, ints=self._ints(scan_integers))
         return RedactionResult(out, dict(found))
 
-    def _walk(self, payload: Any, found: Counter[str], *, strict_keys: bool) -> Any:
+    def _ints(self, override: bool | None) -> bool:
+        return self.scan_integers if override is None else override
+
+    def _walk(
+        self, payload: Any, found: Counter[str], *, strict_keys: bool, ints: bool, field: str | None = None,
+    ) -> Any:
         if isinstance(payload, str):
             return self._redact_text(payload, found)
         if isinstance(payload, _SCALARS):
-            return self._redact_int(payload, found)
+            return self._redact_int(payload, found) if self._int_in_scope(ints, field) else payload
         if isinstance(payload, dict):
             out: dict[Any, Any] = {}
             for key, value in payload.items():
                 if isinstance(key, str):
                     new_key = self._redact_text(key, found)
                 elif isinstance(key, _SCALARS):
-                    new_key = self._redact_int(key, found)
+                    new_key = self._redact_int(key, found) if self._int_in_scope(ints, None) else key
                 else:
                     raise UnsupportedPayload(type(key).__name__)
                 if strict_keys and new_key in out:
                     raise RedactionError("redacted dict keys collide")
-                out[new_key] = self._walk(value, found, strict_keys=strict_keys)
+                child_field = key if isinstance(key, str) else None
+                out[new_key] = self._walk(value, found, strict_keys=strict_keys, ints=ints, field=child_field)
             return out
         if isinstance(payload, list):
-            return [self._walk(v, found, strict_keys=strict_keys) for v in payload]
+            return [self._walk(v, found, strict_keys=strict_keys, ints=ints, field=field) for v in payload]
         if isinstance(payload, tuple):
-            return tuple(self._walk(v, found, strict_keys=strict_keys) for v in payload)
+            return tuple(self._walk(v, found, strict_keys=strict_keys, ints=ints, field=field) for v in payload)
         raise UnsupportedPayload(type(payload).__name__)
+
+    def _int_in_scope(self, ints: bool, field: str | None) -> bool:
+        """Integers are scanned only on opt-in, and only under declared fields if any are set."""
+        if not ints:
+            return False
+        if self.integer_fields is None:
+            return True
+        return field is not None and field.strip().lower() in self.integer_fields
 
     def _redact_int(self, value: Any, found: Counter[str]) -> Any:
         """Numeric JSON fields can hold card numbers or SSNs; scan their digits."""
