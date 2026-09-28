@@ -25,12 +25,36 @@ result = pipeline.guard(Action("llm", "chat", msg.provenance), msg.value)
 result.payload   # 'Email me at [EMAIL]'
 ```
 
+## Configuration (Phase 2)
+
+```python
+from datasec.audit import AuditLog
+from datasec.crypto import LocalKeyProvider          # pip install 'datasec[crypto]'
+from datasec.pipeline import SecurityPipeline
+from datasec.policy import PolicyEngine, default_rules
+
+keys = LocalKeyProvider()
+pipeline = SecurityPipeline(
+    engine=PolicyEngine(default_rules(
+        egress_allowlist={"api.stripe.com"},              # empty = deny every named destination
+        privileged_source_allowlist={"api:stripe-verified"},  # EXTERNAL sources only
+    )),
+    audit=AuditLog("audit.jsonl", signer=keys, checkpoint_path="audit.checkpoint"),
+    key_provider=keys,        # secret memory writes are sealed at rest
+    max_bytes=1_000_000, max_depth=200,
+)
+# Action(..., destination="api.stripe.com")  names an egress host
+# Action(..., scan_integers=True)            opts a call into integer PII scanning
+```
+
+Call `pipeline.audit.close()` on shutdown to write the final signed checkpoint.
+
 ## Red-team suite
 
 `redteam/attacks/` attacks the core in-process (no network). Each attack expects an outcome:
-`blocked`, `redacted`, `detected`, `bounded`, or `known_gap`. Known gaps are strict xfails —
+`blocked`, `redacted`, `detected`, `bounded`, `encrypted`, or `known_gap`. Known gaps are strict xfails —
 fixing one fails the build until its label is updated. Current known gaps:
 
 - Hand-built `Provenance(TRUSTED, ...)` for untrusted data (Python can't prevent it).
 - PII written in words or split across list items (regex limit; Presidio later).
-- Audit tail truncation / full-chain rewrite when no head hash is pinned out-of-band.
+- Audit tail truncation / full-chain rewrite **when no signed checkpoint (or pinned head) is configured**.
