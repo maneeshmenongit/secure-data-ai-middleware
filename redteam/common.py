@@ -9,7 +9,7 @@ from datasec.pipeline import GuardResult, SecurityPipeline
 from datasec.policy import Action, Effect
 
 DEFENDED = frozenset({"blocked", "redacted", "detected", "bounded", "encrypted"})
-EXPECTATIONS = DEFENDED | {"known_gap"}
+EXPECTATIONS = DEFENDED | {"known_gap", "allowed"}  # "allowed" = must not over-block
 
 
 @dataclass(frozen=True)

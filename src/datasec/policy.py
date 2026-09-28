@@ -76,8 +76,15 @@ class PolicyEngine:
         return Decision(Effect.ALLOW, "no rule objected", None)
 
 
+def _strings(values: Iterable[str], what: str) -> Iterable[str]:
+    """A bare str would iterate as characters and silently allow 'a', 'p', ...: reject it."""
+    if isinstance(values, str):
+        raise TypeError(f"{what} must be a collection of strings, not a bare str")
+    return values
+
+
 def _no_low_trust_to_privileged(source_allowlist: Iterable[str]) -> Callable[[Action], Decision | None]:
-    allowed = frozenset(source_allowlist)
+    allowed = frozenset(_strings(source_allowlist, "privileged_source_allowlist"))
 
     def check(action: Action) -> Decision | None:
         trust = action.provenance.trust
@@ -99,7 +106,7 @@ def _never_leak_secrets(action: Action) -> Decision | None:
 
 
 def _egress_allowlist(allowlist: Iterable[str]) -> Callable[[Action], Decision | None]:
-    allowed = frozenset(host.strip().lower() for host in allowlist)
+    allowed = frozenset(host.strip().lower() for host in _strings(allowlist, "egress_allowlist"))
 
     def check(action: Action) -> Decision | None:
         if action.sink not in EGRESS:

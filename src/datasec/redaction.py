@@ -101,6 +101,11 @@ class Redactor:
         scan_integers: bool = False,
         integer_fields: Iterable[str] | None = None,
     ) -> None:
+        if integer_fields is not None:
+            if isinstance(integer_fields, str):
+                raise TypeError("integer_fields must be a collection of strings, not a bare str")
+            if not scan_integers:
+                raise ValueError("integer_fields only takes effect with scan_integers=True")
         self.detectors = tuple(detectors)
         self.scan_integers = scan_integers
         self.integer_fields = (
@@ -140,7 +145,13 @@ class Redactor:
                     raise UnsupportedPayload(type(key).__name__)
                 if strict_keys and new_key in out:
                     raise RedactionError("redacted dict keys collide")
-                child_field = key if isinstance(key, str) else None
+                # Scope is inherited: everything nested under a declared field stays in scope.
+                declared = (
+                    self.integer_fields is not None
+                    and isinstance(key, str)
+                    and key.strip().lower() in self.integer_fields
+                )
+                child_field = key if declared else field
                 out[new_key] = self._walk(value, found, strict_keys=strict_keys, ints=ints, field=child_field)
             return out
         if isinstance(payload, list):
@@ -153,9 +164,8 @@ class Redactor:
         """Integers are scanned only on opt-in, and only under declared fields if any are set."""
         if not ints:
             return False
-        if self.integer_fields is None:
-            return True
-        return field is not None and field.strip().lower() in self.integer_fields
+        # `field` is the nearest declared ancestor key, or None outside any declared field.
+        return self.integer_fields is None or field is not None
 
     def _redact_int(self, value: Any, found: Counter[str]) -> Any:
         """Numeric JSON fields can hold card numbers or SSNs; scan their digits."""

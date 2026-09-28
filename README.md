@@ -52,13 +52,13 @@ pipeline = SecurityPipeline(
 # Action(..., scan_integers=True)            opts a call into integer PII scanning
 ```
 
-Call `pipeline.audit.close()` on shutdown to write the final signed checkpoint. Entries appended
+Call `pipeline.audit.close()` on shutdown (or use `with AuditLog(...) as log:`) to write the final signed checkpoint. Entries appended
 after the last checkpoint are protected only by the chain until the next one is written.
 
 ## Red-team suite
 
 `redteam/attacks/` attacks the core in-process (no network). Each attack expects an outcome:
-`blocked`, `redacted`, `detected`, `bounded`, `encrypted`, or `known_gap`. Known gaps are strict xfails —
+`blocked`, `redacted`, `detected`, `bounded`, `encrypted`, `allowed` (must not over-block), or `known_gap`. Known gaps are strict xfails —
 fixing one fails the build until its label is updated. Current known gaps:
 
 - Hand-built `Provenance(TRUSTED, ...)` for untrusted data (Python can't prevent it).

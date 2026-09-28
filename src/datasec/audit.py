@@ -77,7 +77,10 @@ class SignedCheckpoint:
     def save(self, path: str | Path) -> None:
         path = Path(path)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(asdict(self), sort_keys=True), encoding="utf-8")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # owner-only
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(self), sort_keys=True))
+        os.chmod(tmp, 0o600)  # in case a stale .tmp already existed with wider perms
         os.replace(tmp, path)  # atomic: a crash never leaves a half-written checkpoint
 
     @classmethod
@@ -101,6 +104,8 @@ class AuditLog:
             raise ValueError("signer and checkpoint_path must be given together")
         if signer is not None and path is None:
             raise ValueError("checkpointing needs a file-backed log (path)")
+        if checkpoint_every < 1:
+            raise ValueError("checkpoint_every must be >= 1")
         self._entries: list[AuditEntry] = []
         self._path = Path(path) if path is not None else None
         self._lock = threading.RLock()
@@ -167,6 +172,12 @@ class AuditLog:
         if self._signer is not None:
             self.checkpoint(self._signer).save(self._checkpoint_path)
 
+    def __enter__(self) -> AuditLog:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     @property
     def head(self) -> str:
         return self._entries[-1].hash if self._entries else GENESIS
@@ -192,10 +203,15 @@ class AuditLog:
         return expected_head is None or prev == expected_head
 
     @classmethod
-    def load(cls, path: str | Path) -> AuditLog:
-        """Read a log for inspection; it may fail verify(). To keep appending, use AuditLog(path)."""
+    def load(
+        cls, path: str | Path, *, checkpoint: SignedCheckpoint | None = None, verifier: Any = None,
+    ) -> AuditLog:
+        """Read a log for inspection. Without a checkpoint it may still fail verify();
+        with one, it raises unless the log verifies against it. To append, use AuditLog(path)."""
         log = cls()
         log._entries = _read_entries(Path(path))
+        if checkpoint is not None and not log.verify(checkpoint=checkpoint, verifier=verifier):
+            raise DataSecError(f"audit log {path} failed checkpoint verification")
         return log
 
     def __iter__(self) -> Iterator[AuditEntry]:

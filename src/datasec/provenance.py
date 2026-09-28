@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Callable, Generic, Iterable, TypeVar
 
+from .redaction import normalize
+
 T = TypeVar("T")
 U = TypeVar("U")
 
@@ -34,7 +36,12 @@ class Provenance:
         return Provenance(self.trust, self.source, self.labels | frozenset(labels))
 
     def has(self, label: str) -> bool:
-        return label.strip().lower() in self.labels
+        return _fold(label) in self.labels
+
+
+def _fold(label: str) -> str:
+    """Full-width, long-s, invisible characters: all fold to one spelling."""
+    return normalize(label).strip().casefold()
 
 
 def _normalize_labels(labels: Iterable[str] | str) -> frozenset[str]:
@@ -45,7 +52,7 @@ def _normalize_labels(labels: Iterable[str] | str) -> frozenset[str]:
     for label in labels:
         if not isinstance(label, str):
             raise TypeError(f"label must be str, got {type(label).__name__}")
-        norm = label.strip().lower()
+        norm = _fold(label)
         if not norm:
             raise ValueError("label must not be empty")
         out.add(norm)
