@@ -234,3 +234,18 @@ def test_engine_returning_garbage_denies():
 def test_numeric_card_in_json_body_is_redacted():
     r = SecurityPipeline().guard(Action("llm", "chat", USER), {"card": 4111111111111111})
     assert r.payload == {"card": "[CREDIT_CARD]"}
+
+
+def test_mixed_case_secret_label_still_denied_on_egress():
+    prov = internal("", source="vault", labels="Secret").provenance
+    r = SecurityPipeline().guard(Action("llm", "chat", prov), "sk-test-FAKE")
+    assert not r.allowed
+    assert r.decision.rule == "never_leak_secrets"
+
+
+def test_mixed_case_pii_label_still_redacts_on_egress():
+    from datasec.provenance import Provenance, TrustLevel
+
+    prov = Provenance(TrustLevel.USER, "u", {"PII"})
+    r = SecurityPipeline().guard(Action("llm", "chat", prov), "Jane Doe, Elm St")
+    assert r.decision.rule == "redact_pii_on_egress"

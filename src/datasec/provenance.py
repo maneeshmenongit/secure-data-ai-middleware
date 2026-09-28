@@ -27,15 +27,29 @@ class Provenance:
     labels: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        labels = (self.labels,) if isinstance(self.labels, str) else self.labels
         object.__setattr__(self, "trust", TrustLevel(self.trust))
-        object.__setattr__(self, "labels", frozenset(labels))
+        object.__setattr__(self, "labels", _normalize_labels(self.labels))
 
     def with_labels(self, *labels: str) -> Provenance:
         return Provenance(self.trust, self.source, self.labels | frozenset(labels))
 
     def has(self, label: str) -> bool:
-        return label in self.labels
+        return label.strip().lower() in self.labels
+
+
+def _normalize_labels(labels: Iterable[str] | str) -> frozenset[str]:
+    """One spelling per label, so 'PII' can't slip past a rule checking 'pii'."""
+    if isinstance(labels, str):
+        labels = (labels,)
+    out = set()
+    for label in labels:
+        if not isinstance(label, str):
+            raise TypeError(f"label must be str, got {type(label).__name__}")
+        norm = label.strip().lower()
+        if not norm:
+            raise ValueError("label must not be empty")
+        out.add(norm)
+    return frozenset(out)
 
 
 @dataclass(frozen=True)

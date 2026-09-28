@@ -30,6 +30,11 @@ def _secret_with_pii():
     return outcome(guard("llm", key.provenance, key.value))
 
 
+def _mixed_case_secret_label():
+    key = internal(API_KEY, source="vault:stripe", labels=("Secret",))
+    return outcome(guard("llm", key.provenance, key.value))
+
+
 ATTACKS = [
     *[
         Attack(f"R3.{i}", "secret_exfiltration", "LLM02",
@@ -42,4 +47,7 @@ ATTACKS = [
     Attack("R3.5", "secret_exfiltration", "LLM02",
            "pair a secret with PII hoping REDACT outranks DENY",
            _secret_with_pii, "blocked"),
+    Attack("R3.6", "secret_exfiltration", "LLM02",
+           "label the secret 'Secret' hoping the case-sensitive rule misses it",
+           _mixed_case_secret_label, "blocked"),
 ]
