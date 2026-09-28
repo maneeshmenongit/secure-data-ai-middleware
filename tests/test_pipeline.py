@@ -95,7 +95,7 @@ def test_deeply_nested_payload_denied():
     p = SecurityPipeline()
     r = p.guard(Action("llm", "chat", USER), payload)
     assert not r.allowed
-    assert r.decision.reason == "unsupported payload"
+    assert r.decision.reason == "payload too deep"
 
 
 def test_redacted_key_collision_denied():
@@ -264,3 +264,38 @@ def test_mixed_case_pii_label_still_redacts_on_egress():
     prov = Provenance(TrustLevel.USER, "u", {"PII"})
     r = SecurityPipeline().guard(Action("llm", "chat", prov), "Jane Doe, Elm St")
     assert r.decision.rule == "redact_pii_on_egress"
+
+
+def test_payload_over_byte_cap_denied_and_audited():
+    p = SecurityPipeline(max_bytes=10)
+    assert p.guard(Action("llm", "chat", SVC), "x" * 10).allowed
+    r = p.guard(Action("llm", "chat", SVC), "x" * 11)
+    assert not r.allowed
+    assert r.decision.reason == "payload too large"
+    assert last(p).effect == "deny"
+
+
+def test_bytes_are_counted_as_utf8():
+    p = SecurityPipeline(max_bytes=4)
+    assert p.guard(Action("llm", "chat", SVC), "éé").allowed
+    assert p.guard(Action("llm", "chat", SVC), "ééé").decision.reason == "payload too large"
+
+
+def test_nesting_past_max_depth_denied():
+    p = SecurityPipeline(max_depth=3)
+    assert p.guard(Action("llm", "chat", SVC), [[["x"]]]).allowed
+    assert p.guard(Action("llm", "chat", SVC), [[[["x"]]]]).decision.reason == "payload too deep"
+
+
+def test_self_referencing_payload_denied():
+    loop = []
+    loop.append(loop)
+    r = SecurityPipeline().guard(Action("llm", "chat", SVC), loop)
+    assert not r.allowed
+    assert r.decision.reason == "payload too deep"
+
+
+@pytest.mark.parametrize("kwargs", [{"max_bytes": 0}, {"max_depth": 0}])
+def test_invalid_caps_rejected(kwargs):
+    with pytest.raises(ValueError):
+        SecurityPipeline(**kwargs)

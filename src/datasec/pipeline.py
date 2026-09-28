@@ -23,17 +23,45 @@ def _deny(reason: str, rule: str | None = None) -> Decision:
     return Decision(Effect.DENY, reason, rule)
 
 
+def _over_cap(payload: Any, max_bytes: int, max_depth: int) -> str | None:
+    """Size and depth check before any detector runs. Iterative, so no recursion limit,
+    and depth-bounded, so a self-referencing payload stops instead of looping."""
+    size = 0
+    stack: list[tuple[Any, int]] = [(payload, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, str):
+            size += len(item.encode("utf-8", "surrogatepass"))
+        elif isinstance(item, (dict, list, tuple)):
+            if depth + 1 > max_depth:
+                return "payload too deep"
+            children = [c for kv in item.items() for c in kv] if isinstance(item, dict) else item
+            stack.extend((child, depth + 1) for child in children)
+        else:
+            size += 8
+        if size > max_bytes:
+            return "payload too large"
+    return None
+
+
 class SecurityPipeline:
     def __init__(
         self,
         engine: PolicyEngine | None = None,
         redactor: Redactor | None = None,
         audit: AuditLog | None = None,
+        *,
+        max_bytes: int = 1_000_000,
+        max_depth: int = 200,
     ) -> None:
+        if max_bytes < 1 or max_depth < 1:
+            raise ValueError("max_bytes and max_depth must be >= 1")
         # `is not None`, not `or`: an empty AuditLog is falsy (it has __len__).
         self.engine = engine if engine is not None else PolicyEngine(default_rules())
         self.redactor = redactor if redactor is not None else Redactor()
         self.audit = audit if audit is not None else AuditLog()
+        self.max_bytes = max_bytes
+        self.max_depth = max_depth
 
     def guard(self, action: Action, payload: Any) -> GuardResult:
         if isinstance(action, Action):
@@ -48,6 +76,9 @@ class SecurityPipeline:
             return _deny("unknown sink"), None, action, {}
         if not isinstance(action.provenance, Provenance):
             return _deny("missing provenance"), None, action, {}
+        over = _over_cap(payload, self.max_bytes, self.max_depth)
+        if over:
+            return _deny(over), None, action, {}
         # Only pass the flag when set, so custom redactors with the Phase 1 signature still work.
         ints = {"scan_integers": True} if action.scan_integers else {}
         try:
