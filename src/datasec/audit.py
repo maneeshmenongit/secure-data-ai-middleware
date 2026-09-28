@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 
 from .errors import DataSecError
 
@@ -47,16 +48,68 @@ class AuditEntry:
         return data
 
 
+@dataclass(frozen=True)
+class SignedCheckpoint:
+    """Out-of-band anchor for the chain head. The token is the {head, count, ts}
+    triple encrypted with a KeyProvider key; Fernet tokens are authenticated,
+    so an edited checkpoint file fails is_valid()."""
+
+    head: str
+    count: int
+    ts: str
+    key_id: str
+    token: str
+
+    def claims(self) -> dict:
+        return {"head": self.head, "count": self.count, "ts": self.ts}
+
+    def is_valid(self, verifier: Any) -> bool:
+        try:
+            signed = json.loads(verifier.decrypt(self.token.encode("ascii"), key_id=self.key_id))
+        except Exception:
+            return False
+        return signed == self.claims()
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(asdict(self), sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)  # atomic: a crash never leaves a half-written checkpoint
+
+    @classmethod
+    def read(cls, path: str | Path) -> SignedCheckpoint:
+        try:
+            return cls(**json.loads(Path(path).read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            raise DataSecError(f"corrupt audit checkpoint {path}") from exc
+
+
 class AuditLog:
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        signer: Any = None,
+        checkpoint_path: str | Path | None = None,
+        checkpoint_every: int = 100,
+    ) -> None:
+        if (signer is None) != (checkpoint_path is None):
+            raise ValueError("signer and checkpoint_path must be given together")
         self._entries: list[AuditEntry] = []
         self._path = Path(path) if path is not None else None
-        self._lock = threading.Lock()
-        # Resume an existing file so a restart continues the same chain.
+        self._lock = threading.RLock()
+        self._signer = signer
+        self._checkpoint_path = Path(checkpoint_path) if checkpoint_path is not None else None
+        self._checkpoint_every = checkpoint_every
+        # Resume an existing file so a restart continues the same chain; refuse a
+        # file that fails verification, including against its last checkpoint.
         if self._path is not None and self._path.exists():
             self._entries = _read_entries(self._path)
-            if not self.verify():
-                raise DataSecError(f"existing audit log {self._path} failed verification")
+        cp = None
+        if self._checkpoint_path is not None and self._checkpoint_path.exists():
+            cp = SignedCheckpoint.read(self._checkpoint_path)
+        if not self.verify(checkpoint=cp, verifier=signer):
+            raise DataSecError(f"existing audit log {self._path} failed verification")
 
     def append(
         self, *, sink: str, name: str, effect: str, reason: str, rule: str | None,
@@ -80,19 +133,48 @@ class AuditLog:
                     f.write(json.dumps(asdict(entry), sort_keys=True) + "\n")
                     f.flush()
             self._entries.append(entry)
+            if self._signer is not None and len(self._entries) % self._checkpoint_every == 0:
+                self.checkpoint(self._signer).save(self._checkpoint_path)
         return entry
+
+    def checkpoint(self, signer: Any) -> SignedCheckpoint:
+        with self._lock:
+            claims = {
+                "head": self.head,
+                "count": len(self._entries),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            key_id = signer.current_key_id()
+            token = signer.encrypt(_canonical(claims).encode("utf-8"), key_id=key_id).decode("ascii")
+            return SignedCheckpoint(**claims, key_id=key_id, token=token)
+
+    def close(self) -> None:
+        """Write a final checkpoint on clean shutdown (no-op without a signer)."""
+        if self._signer is not None:
+            self.checkpoint(self._signer).save(self._checkpoint_path)
 
     @property
     def head(self) -> str:
         return self._entries[-1].hash if self._entries else GENESIS
 
-    def verify(self, expected_head: str | None = None) -> bool:
-        """Re-walk the chain. Pass a head stored elsewhere to also catch tail truncation."""
+    def verify(
+        self, expected_head: str | None = None, *, checkpoint: SignedCheckpoint | None = None, verifier: Any = None,
+    ) -> bool:
+        """Re-walk the chain. A pinned head or a signed checkpoint also catches
+        truncation and whole-chain rewrites, which the chain alone cannot."""
         prev = GENESIS
         for e in self._entries:
             if e.prev_hash != prev or entry_hash(prev, e.body()) != e.hash:
                 return False
             prev = e.hash
+        if checkpoint is not None:
+            if verifier is None or not checkpoint.is_valid(verifier):
+                return False
+            if checkpoint.count > len(self._entries):
+                return False
+            anchor = self._entries[checkpoint.count - 1].hash if checkpoint.count else GENESIS
+            if anchor != checkpoint.head:
+                return False
         return expected_head is None or prev == expected_head
 
     @classmethod
