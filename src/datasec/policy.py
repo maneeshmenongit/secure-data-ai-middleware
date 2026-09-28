@@ -15,6 +15,9 @@ KNOWN_SINKS = EGRESS | PRIVILEGED | {"tool:readonly"}
 # Sources exempt from the low-trust rule. EXTERNAL only: UNTRUSTED is never exempt.
 PRIVILEGED_SOURCE_ALLOWLIST: frozenset[str] = frozenset()
 
+# Hosts egress sinks may name as a destination. Empty = deny every named destination.
+EGRESS_ALLOWLIST: frozenset[str] = frozenset()
+
 
 class Effect(Enum):
     ALLOW = "allow"
@@ -27,6 +30,7 @@ class Action:
     sink: str
     name: str
     provenance: Provenance
+    destination: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,15 +97,34 @@ def _never_leak_secrets(action: Action) -> Decision | None:
     return None
 
 
+def _egress_allowlist(allowlist: Iterable[str]) -> Callable[[Action], Decision | None]:
+    allowed = frozenset(host.strip().lower() for host in allowlist)
+
+    def check(action: Action) -> Decision | None:
+        if action.sink not in EGRESS or action.destination is None:
+            return None
+        # A non-str destination raises here; the engine turns that into DENY.
+        if action.destination.strip().lower() in allowed:
+            return None
+        return Decision(Effect.DENY, f"egress to {action.destination} not allowlisted", "egress_allowlist")
+
+    return check
+
+
 def _redact_pii_on_egress(action: Action) -> Decision | None:
     if action.provenance.has("pii") and action.sink in EGRESS:
         return Decision(Effect.REDACT, f"pii redacted before {action.sink}", "redact_pii_on_egress")
     return None
 
 
-def default_rules(*, privileged_source_allowlist: Iterable[str] = PRIVILEGED_SOURCE_ALLOWLIST) -> list[Rule]:
+def default_rules(
+    *,
+    privileged_source_allowlist: Iterable[str] = PRIVILEGED_SOURCE_ALLOWLIST,
+    egress_allowlist: Iterable[str] = EGRESS_ALLOWLIST,
+) -> list[Rule]:
     return [
         Rule("no_low_trust_to_privileged", _no_low_trust_to_privileged(privileged_source_allowlist)),
         Rule("never_leak_secrets", _never_leak_secrets),
+        Rule("egress_allowlist", _egress_allowlist(egress_allowlist)),
         Rule("redact_pii_on_egress", _redact_pii_on_egress),
     ]

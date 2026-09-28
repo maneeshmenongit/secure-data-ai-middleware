@@ -116,3 +116,35 @@ def test_decision_with_non_effect_denies():
     bad = Rule("bad", lambda a: Decision("deny", "x", "bad"))
     d = PolicyEngine([*default_rules(), bad]).evaluate(act("llm"))
     assert d == Decision(Effect.DENY, "rule bad returned invalid effect", "bad")
+
+
+def egress(destination, allow=()):
+    engine = PolicyEngine(default_rules(egress_allowlist=allow))
+    return engine.evaluate(
+        Action("third_party", "post", Provenance(TrustLevel.INTERNAL, "svc"), destination=destination)
+    )
+
+
+def test_unlisted_destination_denied():
+    d = egress("evil.example")
+    assert d.effect is Effect.DENY
+    assert d.rule == "egress_allowlist"
+
+
+def test_listed_destination_allowed():
+    assert egress("api.stripe.com", allow={"api.stripe.com"}).effect is Effect.ALLOW
+
+
+def test_destination_is_normalized():
+    assert egress(" API.Stripe.com ", allow={"api.stripe.com"}).effect is Effect.ALLOW
+
+
+def test_non_string_destination_denies():
+    d = egress(["api.stripe.com"], allow={"api.stripe.com"})
+    assert d.effect is Effect.DENY
+
+
+def test_sink_without_destination_unaffected():
+    engine = PolicyEngine(default_rules())
+    action = Action("llm", "chat", Provenance(TrustLevel.INTERNAL, "svc"))
+    assert engine.evaluate(action).effect is Effect.ALLOW

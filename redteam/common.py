@@ -28,10 +28,10 @@ class Attack:
 
 def guard(
     sink: str, provenance: Any, payload: Any, name: str = "attack",
-    pipeline: SecurityPipeline | None = None,
+    pipeline: SecurityPipeline | None = None, **action_fields: Any,
 ) -> GuardResult:
     p = pipeline if pipeline is not None else SecurityPipeline()
-    return p.guard(Action(sink, name, provenance), payload)
+    return p.guard(Action(sink, name, provenance, **action_fields), payload)
 
 
 def outcome(result: GuardResult) -> str:
