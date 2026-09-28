@@ -12,6 +12,9 @@ EGRESS = frozenset({"llm", "third_party", "http:response"})
 PRIVILEGED = frozenset({"tool:privileged", "third_party", "memory:write"})
 KNOWN_SINKS = EGRESS | PRIVILEGED | {"tool:readonly"}
 
+# Sources exempt from the low-trust rule. EXTERNAL only: UNTRUSTED is never exempt.
+PRIVILEGED_SOURCE_ALLOWLIST: frozenset[str] = frozenset()
+
 
 class Effect(Enum):
     ALLOW = "allow"
@@ -68,12 +71,20 @@ class PolicyEngine:
         return Decision(Effect.ALLOW, "no rule objected", None)
 
 
-def _no_untrusted_to_privileged(action: Action) -> Decision | None:
-    if action.provenance.trust == TrustLevel.UNTRUSTED and action.sink in PRIVILEGED:
+def _no_low_trust_to_privileged(source_allowlist: Iterable[str]) -> Callable[[Action], Decision | None]:
+    allowed = frozenset(source_allowlist)
+
+    def check(action: Action) -> Decision | None:
+        trust = action.provenance.trust
+        if action.sink not in PRIVILEGED or trust > TrustLevel.EXTERNAL:
+            return None
+        if trust == TrustLevel.EXTERNAL and action.provenance.source in allowed:
+            return None
         return Decision(
-            Effect.DENY, f"untrusted data cannot reach {action.sink}", "no_untrusted_to_privileged"
+            Effect.DENY, f"{trust.name.lower()} data cannot reach {action.sink}", "no_low_trust_to_privileged"
         )
-    return None
+
+    return check
 
 
 def _never_leak_secrets(action: Action) -> Decision | None:
@@ -88,9 +99,9 @@ def _redact_pii_on_egress(action: Action) -> Decision | None:
     return None
 
 
-def default_rules() -> list[Rule]:
+def default_rules(*, privileged_source_allowlist: Iterable[str] = PRIVILEGED_SOURCE_ALLOWLIST) -> list[Rule]:
     return [
-        Rule("no_untrusted_to_privileged", _no_untrusted_to_privileged),
+        Rule("no_low_trust_to_privileged", _no_low_trust_to_privileged(privileged_source_allowlist)),
         Rule("never_leak_secrets", _never_leak_secrets),
         Rule("redact_pii_on_egress", _redact_pii_on_egress),
     ]

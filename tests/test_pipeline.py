@@ -51,7 +51,7 @@ def test_untrusted_to_privileged_denied():
     r = p.guard(Action("tool:privileged", "pay", WEB), "wire money")
     assert not r.allowed
     assert r.payload is None
-    assert r.decision.rule == "no_untrusted_to_privileged"
+    assert r.decision.rule == "no_low_trust_to_privileged"
     assert last(p).effect == "deny"
 
 

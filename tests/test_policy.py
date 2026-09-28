@@ -34,15 +34,35 @@ def test_empty_engine_allows():
 def test_untrusted_to_privileged_denied(sink):
     d = ENGINE.evaluate(act(sink, TrustLevel.UNTRUSTED))
     assert d.effect is Effect.DENY
-    assert d.rule == "no_untrusted_to_privileged"
+    assert d.rule == "no_low_trust_to_privileged"
 
 
 def test_untrusted_to_readonly_tool_allowed():
     assert ENGINE.evaluate(act("tool:readonly", TrustLevel.UNTRUSTED)).effect is Effect.ALLOW
 
 
-def test_external_to_privileged_allowed():
-    assert ENGINE.evaluate(act("tool:privileged", TrustLevel.EXTERNAL)).effect is Effect.ALLOW
+@pytest.mark.parametrize("sink", sorted(PRIVILEGED))
+def test_external_to_privileged_denied(sink):
+    d = ENGINE.evaluate(act(sink, TrustLevel.EXTERNAL))
+    assert d.effect is Effect.DENY
+    assert d.rule == "no_low_trust_to_privileged"
+    assert d.reason == f"external data cannot reach {sink}"
+
+
+def test_user_to_privileged_allowed():
+    assert ENGINE.evaluate(act("tool:privileged", TrustLevel.USER)).effect is Effect.ALLOW
+
+
+def test_allowlisted_external_source_reaches_privileged():
+    engine = PolicyEngine(default_rules(privileged_source_allowlist={"api:stripe-verified"}))
+    action = Action("tool:privileged", "pay", Provenance(TrustLevel.EXTERNAL, "api:stripe-verified"))
+    assert engine.evaluate(action).effect is Effect.ALLOW
+
+
+def test_allowlist_never_exempts_untrusted():
+    engine = PolicyEngine(default_rules(privileged_source_allowlist={"web:evil"}))
+    action = Action("tool:privileged", "pay", Provenance(TrustLevel.UNTRUSTED, "web:evil"))
+    assert engine.evaluate(action).effect is Effect.DENY
 
 
 @pytest.mark.parametrize("sink", sorted(EGRESS))
