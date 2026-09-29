@@ -101,3 +101,13 @@ def test_non_string_label_rejected():
 def test_empty_label_rejected():
     with pytest.raises(ValueError):
         Provenance(TrustLevel.USER, "u", {"  "})
+
+
+@pytest.mark.parametrize(
+    "label", ["ＳＥＣＲＥＴ", "ſecret", "SECRET​", "se­cret"],
+    ids=["fullwidth", "long_s", "zero_width", "soft_hyphen"],
+)
+def test_unicode_label_variants_normalize(label):
+    p = Provenance(TrustLevel.INTERNAL, "v", {label})
+    assert p.labels == frozenset({"secret"})
+    assert p.has("Ｓecret")

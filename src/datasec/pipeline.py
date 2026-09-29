@@ -92,6 +92,8 @@ class SecurityPipeline:
             and action.provenance.has("secret")
         ):
             out, decision, extra = self._seal(out, decision)
+        if action.destination is not None:
+            extra = {**extra, "destination": self._safe(action.destination)}
         self._record(action, decision, tally, extra)
         return GuardResult(decision.effect is not Effect.DENY, out, decision)
 

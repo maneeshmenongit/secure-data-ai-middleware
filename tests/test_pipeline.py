@@ -379,3 +379,23 @@ def test_third_party_without_destination_denied():
     r = SecurityPipeline().guard(Action("third_party", "post", SVC), "report")
     assert not r.allowed
     assert r.decision.rule == "egress_allowlist"
+
+
+def test_fullwidth_secret_label_denied_on_egress():
+    prov = internal("", source="vault", labels="ＳＥＣＲＥＴ").provenance
+    r = SecurityPipeline().guard(Action("llm", "chat", prov), "x")
+    assert r.decision.rule == "never_leak_secrets"
+
+
+def test_egress_destination_recorded_in_audit():
+    from datasec.policy import default_rules
+
+    p = SecurityPipeline(engine=PolicyEngine(default_rules(egress_allowlist={"api.example"})))
+    p.guard(Action("third_party", "post", SVC, destination="api.example"), "hi")
+    assert last(p).extra == {"destination": "api.example"}
+
+
+def test_destination_pii_is_redacted_in_audit():
+    p = SecurityPipeline()
+    p.guard(Action("third_party", "post", SVC, destination="jane@example.com"), "hi")
+    assert last(p).extra == {"destination": "[EMAIL]"}

@@ -151,3 +151,9 @@ def test_sink_without_destination_unaffected():
     engine = PolicyEngine(default_rules())
     action = Action("llm", "chat", Provenance(TrustLevel.INTERNAL, "svc"))
     assert engine.evaluate(action).effect is Effect.ALLOW
+
+
+@pytest.mark.parametrize("kw", ["egress_allowlist", "privileged_source_allowlist"])
+def test_allowlist_given_as_bare_string_rejected(kw):
+    with pytest.raises(TypeError):
+        default_rules(**{kw: "api.stripe.com"})

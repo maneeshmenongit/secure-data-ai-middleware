@@ -187,3 +187,19 @@ def test_ssn_with_dots_detected():
 
 def test_decimal_number_is_not_an_ssn():
     assert R.scan("lat 123.456789") == {}
+
+
+def test_integer_fields_as_bare_string_rejected():
+    with pytest.raises(TypeError):
+        Redactor(scan_integers=True, integer_fields="ssn")
+
+
+def test_integer_fields_require_scan_integers():
+    with pytest.raises(ValueError):
+        Redactor(integer_fields={"ssn"})
+
+
+def test_integer_field_scope_covers_nested_values():
+    r = Redactor(scan_integers=True, integer_fields={"ssn"})
+    payload = {"ssn": {"value": 123456789}, "other": {"value": 123456789}}
+    assert r.redact(payload).payload == {"ssn": {"value": "[SSN]"}, "other": {"value": 123456789}}
