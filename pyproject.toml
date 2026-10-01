@@ -8,9 +8,13 @@ dependencies = []
 
 [project.optional-dependencies]
 crypto = ["cryptography>=43"]
+presidio = ["presidio-analyzer>=2.2", "spacy>=3.7"]
 
 [dependency-groups]
 dev = ["pytest>=8", "cryptography>=43"]
+presidio-model = [
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -22,3 +26,4 @@ packages = ["src/datasec"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+markers = ["presidio: needs the optional presidio extra and the en_core_web_lg model"]
