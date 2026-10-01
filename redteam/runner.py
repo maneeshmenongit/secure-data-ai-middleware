@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from collections import defaultdict
@@ -13,7 +14,7 @@ from redteam.common import DEFENDED, Attack
 from redteam.corpus import ATTACKS
 
 SCORECARD_PATH = Path(__file__).with_name("scorecard.json")
-STATUSES = ("pass", "known_gap", "fixed_gap", "unexpected")
+STATUSES = ("pass", "known_gap", "fixed_gap", "unexpected", "skipped")
 
 
 @dataclass(frozen=True)
@@ -24,9 +25,14 @@ class Result:
     description: str
     expect: str
     observed: str
+    requires: str | None = None
 
     @property
     def status(self) -> str:
+        if self.observed == "skipped":
+            # Only an attack that declares an optional dependency may skip; otherwise a
+            # defended attack that started returning "skipped" would vanish from the scorecard.
+            return "skipped" if self.requires else "unexpected"
         defended = self.observed in DEFENDED
         if self.expect == "known_gap":
             return "fixed_gap" if defended else "known_gap"
@@ -34,11 +40,16 @@ class Result:
 
 
 def run_attack(attack: Attack) -> Result:
-    try:
-        observed = attack.run()
-    except Exception as exc:
-        observed = f"error:{type(exc).__name__}"
-    return Result(attack.id, attack.category, attack.owasp, attack.description, attack.expect, observed)
+    if attack.requires and importlib.util.find_spec(attack.requires) is None:
+        observed = "skipped"
+    else:
+        try:
+            observed = attack.run()
+        except Exception as exc:
+            observed = f"error:{type(exc).__name__}"
+    return Result(
+        attack.id, attack.category, attack.owasp, attack.description, attack.expect, observed, attack.requires
+    )
 
 
 def run_all(attacks: list[Attack] = ATTACKS) -> dict:
@@ -52,6 +63,7 @@ def run_all(attacks: list[Attack] = ATTACKS) -> dict:
         "total": len(results),
         "passed": count("pass"),
         "known_gaps": count("known_gap"),
+        "skipped": count("skipped"),
         # A fixed gap is unexpected too: the corpus label must be updated.
         "unexpected": count("unexpected") + count("fixed_gap"),
         "by_category": dict(by_category),
@@ -64,7 +76,7 @@ def main(path: str | Path = SCORECARD_PATH) -> int:
     for r in card["results"]:
         print(f"{r['status']:<11} {r['id']:<7} {r['category']:<20} {r['description']}")
     print(
-        f"\n{card['passed']} passed, {card['known_gaps']} known gaps, "
+        f"\n{card['passed']} passed, {card['known_gaps']} known gaps, {card['skipped']} skipped, "
         f"{card['unexpected']} unexpected / {card['total']} attacks"
     )
     Path(path).write_text(json.dumps(card, indent=2) + "\n")

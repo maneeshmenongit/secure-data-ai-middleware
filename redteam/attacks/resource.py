@@ -4,7 +4,7 @@ import time
 
 from datasec.pipeline import SecurityPipeline
 from datasec.provenance import from_user
-from redteam.common import Attack, guard, outcome
+from redteam.common import Attack, guard, outcome, presidio_pipeline
 
 LIMIT_SECONDS = 1.0
 MB = 1_000_000
@@ -26,6 +26,24 @@ def _oversized():
     return result if time.perf_counter() - start < LIMIT_SECONDS else "slow"
 
 
+def _over_ner_limit():
+    p = presidio_pipeline()
+    if p is None:
+        return "skipped"
+    start = time.perf_counter()
+    result = outcome(guard("llm", from_user("", source="user:attacker").provenance, "word " * 5000, pipeline=p))
+    return result if time.perf_counter() - start < LIMIT_SECONDS else "slow"
+
+
+def _many_short_strings():
+    p = presidio_pipeline()
+    if p is None:
+        return "skipped"
+    start = time.perf_counter()
+    result = outcome(guard("llm", from_user("", source="user:attacker").provenance, ["a"] * 200_000, pipeline=p))
+    return result if time.perf_counter() - start < LIMIT_SECONDS else "slow"
+
+
 ATTACKS = [
     Attack("R6.1", "resource_abuse", "LLM10", "1 MB of email-local characters, no '@'",
            _timed("a" * MB), "bounded"),
@@ -43,4 +61,8 @@ ATTACKS = [
            _timed("(555) " * (MB // 6)), "bounded"),
     Attack("R6.8", "resource_abuse", "LLM10", "10 MB payload under the default cap",
            _oversized, "blocked"),
+    Attack("R6.9", "resource_abuse", "LLM10", "25k-char text to stall the NER model (Presidio configured)",
+           _over_ner_limit, "blocked", requires="presidio_analyzer"),
+    Attack("R6.10", "resource_abuse", "LLM10", "200k one-char strings: ~1 ms of NER each (Presidio configured)",
+           _many_short_strings, "blocked", requires="presidio_analyzer"),
 ]

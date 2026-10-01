@@ -4,7 +4,7 @@ import json
 
 from datasec.policy import Effect
 from datasec.provenance import from_user
-from redteam.common import Attack, guard
+from redteam.common import Attack, guard, presidio_pipeline
 
 
 def _pii(payload, *forbidden, **action_fields):
@@ -18,6 +18,25 @@ def _pii(payload, *forbidden, **action_fields):
             return "leaked"
         return "redacted" if r.decision.effect is Effect.REDACT else "allowed"
     return run
+
+
+NAME_AND_ADDRESS = "Ship it to Jane Doe, 1600 Pennsylvania Ave, Washington"
+
+
+def _with_presidio(payload, *forbidden):
+    def run():
+        p = presidio_pipeline()
+        if p is None:
+            return "skipped"
+        return _pii(payload, *forbidden, pipeline=p)()
+    return run
+
+
+_names_with_presidio = _with_presidio(NAME_AND_ADDRESS, "Jane Doe")
+CSV_ROWS = (
+    "name,email,phone\nAngela Merkel,angela@example.com,555-123-4567\n"
+    "Barack Obama,barack@example.com,555-987-6543\n"
+)
 
 
 ATTACKS = [
@@ -55,6 +74,14 @@ ATTACKS = [
            _pii({"card": 4111111111111111}, "4111111111111111", scan_integers=True), "redacted"),
     Attack("R2.16", "pii_evasion", "LLM02", "SSN written with dot separators",
            _pii("ssn 123.45.6789", "123.45.6789"), "redacted"),
+    Attack("R2.17", "pii_evasion", "LLM02", "person's name and address sent to the LLM (Presidio configured)",
+           _names_with_presidio, "redacted", requires="presidio_analyzer"),
+    Attack("R2.18", "pii_evasion", "LLM02", "CSV rows: names glued to emails and phones (Presidio configured)",
+           _with_presidio(CSV_ROWS, "Angela Merkel", "Barack Obama"), "redacted", requires="presidio_analyzer"),
+    Attack("R2.19", "pii_evasion", "LLM02", "'Name <email>' address-book format (Presidio configured)",
+           _with_presidio("Jane Doe<jane@x.com>", "Jane Doe"), "redacted", requires="presidio_analyzer"),
+    Attack("R2.20", "pii_evasion", "LLM02", "bracket token glued to a name to hide it from NER (Presidio configured)",
+           _with_presidio("Ship to [NOTE]Angela Merkel", "Angela Merkel"), "redacted", requires="presidio_analyzer"),
     Attack("R2g.1", "pii_evasion", "LLM02", "email spelled out in words",
            _pii("reach john at example dot com", "john at example dot com"), "known_gap"),
     Attack("R2g.2", "pii_evasion", "LLM02", "SSN spelled out in words",
@@ -63,4 +90,6 @@ ATTACKS = [
            "known_gap"),
     Attack("R2g.3", "pii_evasion", "LLM02", "email split across two list items",
            _pii(["jane.doe", "@example.com"], "jane.doe"), "known_gap"),
+    Attack("R2g.4", "pii_evasion", "LLM02", "person's name and address under the default regex redactor",
+           _pii(NAME_AND_ADDRESS, "Jane Doe"), "known_gap"),
 ]

@@ -55,6 +55,25 @@ pipeline = SecurityPipeline(
 Call `pipeline.audit.close()` on shutdown (or use `with AuditLog(...) as log:`) to write the final signed checkpoint. Entries appended
 after the last checkpoint are protected only by the chain until the next one is written.
 
+## Names and places (optional)
+
+```bash
+pip install 'datasec[presidio]'
+python -m spacy download en_core_web_lg      # ~400 MB, loaded once at startup
+```
+
+```python
+from datasec.presidio import PresidioRedactor
+pipeline = SecurityPipeline(redactor=PresidioRedactor())   # PERSON + LOCATION on egress sinks
+```
+
+NER runs only on egress sinks (`llm`, `third_party`, `http:response`) and on caller-supplied
+audit metadata. Any single string over 20,000 characters is **denied** on egress rather than sent
+unanalyzed. Raise `ner_max_chars` if you need to send longer documents. Each payload also has an
+NER budget (`ner_max_strings=256`, `ner_max_total_chars=50_000`), because every analyzed string costs
+~1 ms; payloads over budget are denied on egress. In this repo:
+`uv sync --extra presidio --group presidio-model`.
+
 ## Red-team suite
 
 `redteam/attacks/` attacks the core in-process (no network). Each attack expects an outcome:
@@ -62,6 +81,7 @@ after the last checkpoint are protected only by the chain until the next one is 
 fixing one fails the build until its label is updated. Current known gaps:
 
 - Hand-built `Provenance(TRUSTED, ...)` for untrusted data (Python can't prevent it).
-- PII written in words or split across list items (regex limit; Presidio later).
+- PII written in words or split across list items (regex limit; Presidio's email/SSN recognizers are regex too).
 - Audit tail truncation / full-chain rewrite **when no signed checkpoint (or pinned head) is configured**.
 - Replaying an older genuine checkpoint after truncating the tail (needs a monotonic anchor outside the attacker's reach).
+- People's names and places when Presidio is not configured (regex can't recognize them).
