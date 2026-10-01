@@ -132,14 +132,14 @@ class Redactor:
         field: str | None = None, ner: bool = False,
     ) -> Any:
         if isinstance(payload, str):
-            return self._redact_text(payload, found, ner=ner)
+            return self._redact_text(payload, found, **({"ner": True} if ner else {}))
         if isinstance(payload, _SCALARS):
             return self._redact_int(payload, found) if self._int_in_scope(ints, field) else payload
         if isinstance(payload, dict):
             out: dict[Any, Any] = {}
             for key, value in payload.items():
                 if isinstance(key, str):
-                    new_key = self._redact_text(key, found, ner=ner)
+                    new_key = self._redact_text(key, found, **({"ner": True} if ner else {}))
                 elif isinstance(key, _SCALARS):
                     new_key = self._redact_int(key, found) if self._int_in_scope(ints, None) else key
                 else:
@@ -183,6 +183,11 @@ class Redactor:
         return value if redacted == text else redacted
 
     def _redact_text(self, text: str, found: Counter[str], *, ner: bool = False) -> str:
+        return self._redact_spans(text, found)[0]
+
+    def _redact_spans(self, text: str, found: Counter[str]) -> tuple[str, list[tuple[int, int]]]:
+        """Regex redaction. Also returns where each placeholder sits in the output, so a
+        later pass knows exactly which brackets are ours (not user-written look-alikes)."""
         text = normalize(text)
         claimed = bytearray(len(text))
         spans: list[tuple[int, int, str]] = []
@@ -197,13 +202,18 @@ class Redactor:
                 spans.append((start, end, det.label))
                 found[det.label] += 1
         if not spans:
-            return text
+            return text, []
         spans.sort()
         parts: list[str] = []
-        pos = 0
+        placed: list[tuple[int, int]] = []
+        pos = out = 0
         for start, end, label in spans:
             parts.append(text[pos:start])
-            parts.append(f"[{label}]")
+            out += start - pos
+            placeholder = f"[{label}]"
+            parts.append(placeholder)
+            placed.append((out, out + len(placeholder)))
+            out += len(placeholder)
             pos = end
         parts.append(text[pos:])
-        return "".join(parts)
+        return "".join(parts), placed

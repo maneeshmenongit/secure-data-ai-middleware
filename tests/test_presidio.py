@@ -104,3 +104,45 @@ def test_over_limit_text_denied(ner):
     assert not r.allowed
     assert r.decision.reason == "scan failed"
     assert list(p.audit)[-1].effect == "deny"
+
+
+@pytest.mark.parametrize(
+    "text,names",
+    [
+        ("name,email,phone\nAngela Merkel,angela@example.com,555-123-4567\n"
+         "Barack Obama,barack@example.com,555-987-6543\n", ["Angela Merkel", "Barack Obama"]),
+        ("Jane Doe<jane@x.com>", ["Jane Doe"]),
+        ("Barack Obama,123-45-6789", ["Barack", "Obama"]),
+        ("Angela Merkel[X]", ["Angela Merkel"]),
+        ("Ship to [NOTE]Angela Merkel", ["Angela Merkel"]),
+    ],
+    ids=["csv_rows", "name_angle_email", "name_comma_ssn", "user_bracket_after", "user_bracket_before"],
+)
+def test_names_next_to_placeholders_are_redacted(ner, text, names):
+    out = ner.redact(text).payload
+    for name in names:
+        assert name not in out
+
+
+def test_ipv4_placeholder_preserved(ner):
+    r = ner.redact("Angela Merkel/10.0.0.1")
+    assert "[IPV4]" in r.payload
+    assert "Angela Merkel" not in r.payload
+    assert r.found.get("IPV4") == 1
+
+
+def test_many_short_strings_hit_ner_budget(ner):
+    import time
+
+    p = SecurityPipeline(redactor=ner)
+    start = time.perf_counter()
+    r = p.guard(Action("llm", "chat", USER), ["a"] * 200_000)
+    assert time.perf_counter() - start < 2.0
+    assert not r.allowed
+    assert r.decision.reason == "scan failed"
+
+
+def test_total_ner_chars_budget(ner):
+    r = SecurityPipeline(redactor=ner).guard(Action("llm", "chat", USER), ["word " * 3000] * 10)
+    assert not r.allowed
+    assert r.decision.reason == "scan failed"

@@ -69,7 +69,9 @@ pipeline = SecurityPipeline(redactor=PresidioRedactor())   # PERSON + LOCATION o
 
 NER runs only on egress sinks (`llm`, `third_party`, `http:response`) and on caller-supplied
 audit metadata. Any single string over 20,000 characters is **denied** on egress rather than sent
-unanalyzed. Raise `ner_max_chars` if you need to send longer documents. In this repo:
+unanalyzed. Raise `ner_max_chars` if you need to send longer documents. Each payload also has an
+NER budget (`ner_max_strings=256`, `ner_max_total_chars=50_000`), because every analyzed string costs
+~1 ms; payloads over budget are denied on egress. In this repo:
 `uv sync --extra presidio --group presidio-model`.
 
 ## Red-team suite

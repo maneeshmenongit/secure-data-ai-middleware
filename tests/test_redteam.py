@@ -20,7 +20,7 @@ def test_attack(attack):
     if attack.requires and importlib.util.find_spec(attack.requires) is None:
         pytest.skip(f"needs optional {attack.requires}")
     observed = attack.run()
-    if observed == "skipped":
+    if observed == "skipped" and attack.requires:
         pytest.skip("optional dependency unavailable")
     if attack.expect == "known_gap":
         assert observed in DEFENDED  # xfail(strict): passes only once the gap is fixed
@@ -72,6 +72,11 @@ def test_missing_requirement_is_skipped():
     assert (card["skipped"], card["unexpected"]) == (1, 0)
 
 
-def test_attack_reporting_skipped_is_skipped():
+def test_skipped_without_requires_is_unexpected():
     card = run_all([Attack("F10", "c", "o", "d", lambda: "skipped", "redacted")])
+    assert card["results"][0]["status"] == "unexpected"
+
+
+def test_skipped_with_requires_is_skipped():
+    card = run_all([Attack("F11", "c", "o", "d", lambda: "skipped", "redacted", requires="json")])
     assert card["results"][0]["status"] == "skipped"

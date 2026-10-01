@@ -35,6 +35,15 @@ def _over_ner_limit():
     return result if time.perf_counter() - start < LIMIT_SECONDS else "slow"
 
 
+def _many_short_strings():
+    p = presidio_pipeline()
+    if p is None:
+        return "skipped"
+    start = time.perf_counter()
+    result = outcome(guard("llm", from_user("", source="user:attacker").provenance, ["a"] * 200_000, pipeline=p))
+    return result if time.perf_counter() - start < LIMIT_SECONDS else "slow"
+
+
 ATTACKS = [
     Attack("R6.1", "resource_abuse", "LLM10", "1 MB of email-local characters, no '@'",
            _timed("a" * MB), "bounded"),
@@ -54,4 +63,6 @@ ATTACKS = [
            _oversized, "blocked"),
     Attack("R6.9", "resource_abuse", "LLM10", "25k-char text to stall the NER model (Presidio configured)",
            _over_ner_limit, "blocked", requires="presidio_analyzer"),
+    Attack("R6.10", "resource_abuse", "LLM10", "200k one-char strings: ~1 ms of NER each (Presidio configured)",
+           _many_short_strings, "blocked", requires="presidio_analyzer"),
 ]

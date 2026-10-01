@@ -25,11 +25,14 @@ class Result:
     description: str
     expect: str
     observed: str
+    requires: str | None = None
 
     @property
     def status(self) -> str:
         if self.observed == "skipped":
-            return "skipped"
+            # Only an attack that declares an optional dependency may skip; otherwise a
+            # defended attack that started returning "skipped" would vanish from the scorecard.
+            return "skipped" if self.requires else "unexpected"
         defended = self.observed in DEFENDED
         if self.expect == "known_gap":
             return "fixed_gap" if defended else "known_gap"
@@ -44,7 +47,9 @@ def run_attack(attack: Attack) -> Result:
             observed = attack.run()
         except Exception as exc:
             observed = f"error:{type(exc).__name__}"
-    return Result(attack.id, attack.category, attack.owasp, attack.description, attack.expect, observed)
+    return Result(
+        attack.id, attack.category, attack.owasp, attack.description, attack.expect, observed, attack.requires
+    )
 
 
 def run_all(attacks: list[Attack] = ATTACKS) -> dict:

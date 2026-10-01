@@ -449,3 +449,13 @@ def test_plain_redactor_gets_no_ner_kwarg():
 
     r = SecurityPipeline(redactor=Legacy()).guard(Action("llm", "chat", USER), "mail jane@example.com")
     assert r.payload == "mail [EMAIL]"
+
+
+def test_subclass_overriding_redact_text_old_signature_still_works():
+    class Custom(Redactor):
+        def _redact_text(self, text, found):
+            return super()._redact_text(text, found).replace("secret", "[X]")
+
+    assert Custom().redact("hi secret").payload == "hi [X]"
+    p = SecurityPipeline(redactor=Custom())
+    assert p.guard(Action("llm", "chat", USER), "hi secret").allowed
