@@ -108,3 +108,12 @@ def test_loopback_hosts_allowed(host):
 def test_non_loopback_hosts_refused(host):
     with pytest.raises(SystemExit):
         check_host(host)
+
+
+def test_page_never_uses_innerhtml():
+    from pathlib import Path
+
+    page = Path("webapp/static/index.html").read_text()
+    assert "innerHTML" not in page and "outerHTML" not in page and "insertAdjacentHTML" not in page
+    assert "textContent" in page  # model output is rendered as text, never as HTML
+    assert "<script src=" not in page  # no external scripts

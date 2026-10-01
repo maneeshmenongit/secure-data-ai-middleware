@@ -1,1 +1,174 @@
-<!doctype html><title>DataSec Demo Console</title><p>DataSec Demo Console</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataSec Demo Console</title>
+<style>
+:root { --bg:#f7f7f5; --panel:#ffffff; --ink:#1c1c1a; --muted:#6b6b66; --line:#e2e1dc; --accent:#2f5bea;
+  --allow:#1f7a3d; --redact:#a15c00; --deny:#b3261e; --bypass:#6b3fa0; --code:#f1f0ec; }
+@media (prefers-color-scheme: dark) { :root { --bg:#151515; --panel:#1f1f1e; --ink:#ecebe6; --muted:#a3a29c;
+  --line:#34332f; --accent:#7f9cff; --allow:#2e8f4e; --redact:#b8781a; --deny:#c9433a; --bypass:#8a5ccc; --code:#2a2a28; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:20px; align-items:center; flex-wrap:wrap; }
+h1 { font-size:18px; margin:0; }
+h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; }
+main { display:grid; grid-template-columns:300px minmax(0,1fr) 400px; gap:16px; padding:16px; }
+@media (max-width:1100px) { main { grid-template-columns:1fr; } }
+section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+button { font:inherit; border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px;
+  padding:8px 10px; cursor:pointer; text-align:left; }
+button:hover, button:focus-visible { border-color:var(--accent); outline:none; }
+.preset { display:block; width:100%; margin-bottom:8px; }
+.preset small { display:block; color:var(--muted); }
+.switch { display:flex; align-items:center; gap:8px; font-weight:600; cursor:pointer; }
+.on { color:var(--allow); } .off { color:var(--deny); }
+pre { background:var(--code); border-radius:8px; padding:10px; white-space:pre-wrap; word-break:break-word;
+  margin:4px 0 12px; font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.badge { display:inline-block; padding:2px 9px; border-radius:999px; font-weight:700; font-size:12px; color:#fff; }
+.ALLOW { background:var(--allow); } .REDACT { background:var(--redact); }
+.DENY { background:var(--deny); } .BYPASS { background:var(--bypass); }
+label.field { display:block; font-size:13px; color:var(--muted); margin-top:8px; }
+select, textarea { width:100%; font:inherit; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:8px; padding:6px; }
+header select { width:auto; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+td, th { border-bottom:1px solid var(--line); padding:4px; text-align:left; vertical-align:top; word-break:break-word; }
+.muted { color:var(--muted); } .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+.explain { color:var(--muted); font-size:13px; margin:0 0 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DataSec Demo Console</h1>
+  <label class="switch"><input type="checkbox" id="protection" checked> Protection <span id="protState" class="on">ON</span></label>
+  <label>LLM <select id="llm"></select></label>
+  <span class="muted" id="redactor"></span>
+</header>
+<main>
+  <section>
+    <h2>Scenarios</h2>
+    <div id="presets"></div>
+    <h2 style="margin-top:18px">Custom</h2>
+    <label class="field">Text <textarea id="cText" rows="4"></textarea></label>
+    <label class="field">Origin
+      <select id="cOrigin">
+        <option value="user">user</option><option value="web">web page (untrusted)</option>
+        <option value="tool">tool reply (external)</option><option value="vault">vault (secret)</option>
+      </select></label>
+    <label class="field">Sink
+      <select id="cSink">
+        <option value="llm">LLM</option><option value="tool:privileged">payment tool</option>
+        <option value="http:response">HTTP response</option>
+      </select></label>
+    <button id="cRun" style="margin-top:10px">Run custom</button>
+  </section>
+  <section>
+    <h2>Last run</h2>
+    <div id="result" class="muted">Pick a scenario, then flip Protection and run it again.</div>
+  </section>
+  <section>
+    <h2>Audit log</h2>
+    <div class="row"><button id="verify">Verify chain</button><button id="tamper">Tamper demo</button><button id="reset">Reset</button></div>
+    <div id="auditStatus" class="muted"></div>
+    <table><thead><tr><th>#</th><th>sink</th><th>effect</th><th>reason</th><th>found</th></tr></thead><tbody id="audit"></tbody></table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+function el(tag, text, cls) {
+  const n = document.createElement(tag);
+  if (text !== undefined && text !== null) n.textContent = text;  // text only, never HTML
+  if (cls) n.className = cls;
+  return n;
+}
+async function api(path, body) {
+  const opts = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "request rejected");
+  return data;
+}
+function block(parent, title, text) {
+  parent.append(el("div", title, "muted"));
+  parent.append(el("pre", text === null || text === undefined ? "(nothing)" : String(text)));
+}
+let scenarios = {};
+function render(r, explain) {
+  const out = $("result");
+  out.replaceChildren();
+  out.className = "";
+  if (explain) out.append(el("p", explain, "explain"));
+  block(out, `Sent (origin: ${r.origin} → sink: ${r.sink})`, r.sent);
+  const effect = r.decision.effect.toUpperCase();
+  const d = el("div");
+  d.append(el("span", effect, "badge " + effect), el("span", "  " + r.decision.reason));
+  d.style.marginBottom = "12px";
+  out.append(d);
+  block(out, r.reached_sink ? "Reached the " + (r.sink === "llm" ? "LLM" : r.sink === "tool:privileged" ? "payment tool" : "response") : "Nothing reached the sink", r.delivered);
+  if (r.llm_reply !== null) block(out, "LLM reply" + (r.protection ? " (after the output guard)" : ""), r.llm_reply);
+}
+async function run(body, explain) {
+  body.protection = $("protection").checked;
+  body.llm = $("llm").value;
+  $("result").textContent = "Running…";
+  try { render(await api("/api/run", body), explain); }
+  catch (e) { $("result").textContent = "Error: " + e.message; }
+  refreshAudit();
+}
+async function refreshAudit() {
+  const rows = await api("/api/audit");
+  const tb = $("audit");
+  tb.replaceChildren();
+  rows.forEach((e, i) => {
+    const tr = el("tr");
+    const found = Object.entries(e.tally).map(([k, v]) => `${k}×${v}`).join(" ");
+    [String(i + 1), e.sink, e.effect, e.reason, found].forEach((t) => tr.append(el("td", t)));
+    tb.append(tr);
+  });
+}
+async function init() {
+  $("protection").addEventListener("change", () => {
+    const on = $("protection").checked;
+    $("protState").textContent = on ? "ON" : "OFF";
+    $("protState").className = on ? "on" : "off";
+  });
+  const info = await api("/api/info");
+  $("redactor").textContent = info.redactor === "presidio" ? "Redactor: regex + Presidio (names, places)" : "Redactor: regex only";
+  for (const m of await api("/api/llms")) {
+    const o = el("option", m.id + (m.available ? "" : " (no key)"));
+    o.value = m.id;
+    o.disabled = !m.available;
+    $("llm").append(o);
+  }
+  for (const s of await api("/api/scenarios")) {
+    scenarios[s.id] = s;
+    const b = el("button", null, "preset");
+    b.append(el("strong", s.title), el("small", s.origin + " → " + s.sink));
+    b.addEventListener("click", () => run({scenario_id: s.id}, s.explain));
+    $("presets").append(b);
+  }
+  $("cRun").addEventListener("click", () => run({text: $("cText").value, origin: $("cOrigin").value, sink: $("cSink").value}));
+  $("verify").addEventListener("click", async () => {
+    const v = await api("/api/audit/verify", {});
+    $("auditStatus").textContent = v.ok ? `Chain verifies (${v.entries} entries).` : "Chain does NOT verify.";
+  });
+  $("tamper").addEventListener("click", async () => {
+    try {
+      const t = await api("/api/audit/tamper-demo", {});
+      $("auditStatus").textContent = `Copy before edit verifies: ${t.original_ok}. After flipping one entry: ${t.tampered_ok}. Live log untouched.`;
+    } catch (e) { $("auditStatus").textContent = e.message; }
+  });
+  $("reset").addEventListener("click", async () => {
+    await api("/api/reset", {});
+    $("auditStatus").textContent = "Reset.";
+    $("result").textContent = "Pick a scenario.";
+    refreshAudit();
+  });
+  refreshAudit();
+}
+init();
+</script>
+</body>
+</html>
