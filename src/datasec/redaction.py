@@ -128,17 +128,18 @@ class Redactor:
         return self.scan_integers if override is None else override
 
     def _walk(
-        self, payload: Any, found: Counter[str], *, strict_keys: bool, ints: bool, field: str | None = None,
+        self, payload: Any, found: Counter[str], *, strict_keys: bool, ints: bool,
+        field: str | None = None, ner: bool = False,
     ) -> Any:
         if isinstance(payload, str):
-            return self._redact_text(payload, found)
+            return self._redact_text(payload, found, ner=ner)
         if isinstance(payload, _SCALARS):
             return self._redact_int(payload, found) if self._int_in_scope(ints, field) else payload
         if isinstance(payload, dict):
             out: dict[Any, Any] = {}
             for key, value in payload.items():
                 if isinstance(key, str):
-                    new_key = self._redact_text(key, found)
+                    new_key = self._redact_text(key, found, ner=ner)
                 elif isinstance(key, _SCALARS):
                     new_key = self._redact_int(key, found) if self._int_in_scope(ints, None) else key
                 else:
@@ -152,12 +153,18 @@ class Redactor:
                     and key.strip().lower() in self.integer_fields
                 )
                 child_field = key if declared else field
-                out[new_key] = self._walk(value, found, strict_keys=strict_keys, ints=ints, field=child_field)
+                out[new_key] = self._walk(
+                    value, found, strict_keys=strict_keys, ints=ints, field=child_field, ner=ner
+                )
             return out
         if isinstance(payload, list):
-            return [self._walk(v, found, strict_keys=strict_keys, ints=ints, field=field) for v in payload]
+            return [
+                self._walk(v, found, strict_keys=strict_keys, ints=ints, field=field, ner=ner) for v in payload
+            ]
         if isinstance(payload, tuple):
-            return tuple(self._walk(v, found, strict_keys=strict_keys, ints=ints, field=field) for v in payload)
+            return tuple(
+                self._walk(v, found, strict_keys=strict_keys, ints=ints, field=field, ner=ner) for v in payload
+            )
         raise UnsupportedPayload(type(payload).__name__)
 
     def _int_in_scope(self, ints: bool, field: str | None) -> bool:
@@ -175,7 +182,7 @@ class Redactor:
         redacted = self._redact_text(text, found)
         return value if redacted == text else redacted
 
-    def _redact_text(self, text: str, found: Counter[str]) -> str:
+    def _redact_text(self, text: str, found: Counter[str], *, ner: bool = False) -> str:
         text = normalize(text)
         claimed = bytearray(len(text))
         spans: list[tuple[int, int, str]] = []

@@ -9,7 +9,7 @@ from typing import Any
 from .audit import AuditLog
 from .crypto import KeyProvider, seal
 from .errors import DataSecError, UnsupportedPayload
-from .policy import KNOWN_SINKS, Action, Decision, Effect, PolicyEngine, default_rules
+from .policy import EGRESS, KNOWN_SINKS, Action, Decision, Effect, PolicyEngine, default_rules
 from .provenance import Provenance
 from .redaction import Redactor
 
@@ -93,7 +93,7 @@ class SecurityPipeline:
         ):
             out, decision, extra = self._seal(out, decision)
         if action.destination is not None:
-            extra = {**extra, "destination": self._safe(action.destination)}
+            extra = {**extra, "destination": self._safe(action.destination, ner=True)}
         self._record(action, decision, tally, extra)
         return GuardResult(decision.effect is not Effect.DENY, out, decision)
 
@@ -119,7 +119,9 @@ class SecurityPipeline:
         if over:
             return _deny(over), None, action, {}
         # Only pass the flag when set, so custom redactors with the Phase 1 signature still work.
-        ints = {"scan_integers": True} if action.scan_integers else {}
+        ints: dict[str, bool] = {"scan_integers": True} if action.scan_integers else {}
+        if getattr(self.redactor, "ner_capable", False):
+            ints["ner"] = action.sink in EGRESS  # the model only runs where pii changes the outcome
         try:
             tally = self.redactor.scan(payload, **ints)
         except (UnsupportedPayload, RecursionError):
@@ -148,12 +150,12 @@ class SecurityPipeline:
         try:
             self.audit.append(
                 sink=self._safe(action.sink),
-                name=self._safe(action.name),
+                name=self._safe(action.name, ner=True),
                 effect=decision.effect.value,
                 reason=self._safe(decision.reason),
                 rule=self._safe(decision.rule) if decision.rule is not None else None,
                 trust=prov.trust.name if prov else "UNKNOWN",
-                source=self._safe(prov.source) if prov else "",
+                source=self._safe(prov.source, ner=True) if prov else "",
                 labels=sorted(self._safe(label) for label in prov.labels) if prov else [],
                 tally=tally,
                 extra=extra,
@@ -161,9 +163,12 @@ class SecurityPipeline:
         except Exception as exc:
             raise DataSecError("audit append failed") from exc
 
-    def _safe(self, value: Any) -> str:
-        """Caller-supplied metadata (names, labels, custom rule text) can carry PII; redact it."""
+    def _safe(self, value: Any, *, ner: bool = False) -> str:
+        """Caller-supplied metadata (names, labels, custom rule text) can carry PII; redact it.
+        NER runs only on caller free text (name, source, destination), never per rule string."""
+        # Explicit ner=False matters: an NER-capable redactor defaults to ner=True.
+        kwargs = {"ner": ner} if getattr(self.redactor, "ner_capable", False) else {}
         try:
-            return self.redactor.redact(str(value)).payload
+            return self.redactor.redact(str(value), **kwargs).payload
         except Exception:
             return "[UNREDACTABLE]"

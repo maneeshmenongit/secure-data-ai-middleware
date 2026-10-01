@@ -1,3 +1,4 @@
+import importlib.util
 import json
 
 import pytest
@@ -16,7 +17,11 @@ def _param(attack):
 
 @pytest.mark.parametrize("attack", [_param(a) for a in ATTACKS])
 def test_attack(attack):
+    if attack.requires and importlib.util.find_spec(attack.requires) is None:
+        pytest.skip(f"needs optional {attack.requires}")
     observed = attack.run()
+    if observed == "skipped":
+        pytest.skip("optional dependency unavailable")
     if attack.expect == "known_gap":
         assert observed in DEFENDED  # xfail(strict): passes only once the gap is fixed
     else:
@@ -58,3 +63,15 @@ def test_main_writes_scorecard_and_returns_zero(tmp_path):
     card = json.loads(path.read_text())
     assert card["unexpected"] == 0
     assert card["total"] == len(ATTACKS)
+
+
+def test_missing_requirement_is_skipped():
+    a = Attack("F9", "c", "o", "d", lambda: "blocked", "blocked", requires="no_such_module_xyz")
+    card = run_all([a])
+    assert card["results"][0]["status"] == "skipped"
+    assert (card["skipped"], card["unexpected"]) == (1, 0)
+
+
+def test_attack_reporting_skipped_is_skipped():
+    card = run_all([Attack("F10", "c", "o", "d", lambda: "skipped", "redacted")])
+    assert card["results"][0]["status"] == "skipped"

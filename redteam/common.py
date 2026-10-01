@@ -20,6 +20,7 @@ class Attack:
     description: str
     run: Callable[[], str]
     expect: str
+    requires: str | None = None  # importable module an optional attack depends on
 
     def __post_init__(self) -> None:
         if self.expect not in EXPECTATIONS:

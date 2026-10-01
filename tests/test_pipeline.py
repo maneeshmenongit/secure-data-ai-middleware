@@ -399,3 +399,53 @@ def test_destination_pii_is_redacted_in_audit():
     p = SecurityPipeline()
     p.guard(Action("third_party", "post", SVC, destination="jane@example.com"), "hi")
     assert last(p).extra == {"destination": "[EMAIL]"}
+
+
+class SpyNER(Redactor):
+    """Stands in for an NER-capable redactor: records every call and its ner flag."""
+
+    ner_capable = True
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def scan(self, payload, *, scan_integers=None, ner=True):
+        self.calls.append(("scan", payload, ner))
+        return super().scan(payload, scan_integers=scan_integers)
+
+    def redact(self, payload, *, scan_integers=None, ner=True):
+        self.calls.append(("redact", payload, ner))
+        return super().redact(payload, scan_integers=scan_integers)
+
+
+@pytest.mark.parametrize(
+    "sink,expected",
+    [("llm", True), ("http:response", True), ("tool:readonly", False), ("memory:write", False)],
+)
+def test_ner_flag_follows_egress(sink, expected):
+    spy = SpyNER()
+    SecurityPipeline(redactor=spy).guard(Action(sink, "op", USER), "payload-text")
+    assert [ner for kind, payload, ner in spy.calls if payload == "payload-text"] == [expected]
+
+
+def test_metadata_ner_only_for_caller_text():
+    spy = SpyNER()
+    prov = from_user("", source="user:Jane Doe").provenance
+    SecurityPipeline(redactor=spy).guard(
+        Action("tool:readonly", "lookup Jane", prov, destination="api.example"), "x"
+    )
+    ner_texts = {payload for kind, payload, ner in spy.calls if kind == "redact" and ner}
+    assert ner_texts == {"lookup Jane", "user:Jane Doe", "api.example"}
+
+
+def test_plain_redactor_gets_no_ner_kwarg():
+    class Legacy(Redactor):
+        def scan(self, payload):
+            return super().scan(payload)
+
+        def redact(self, payload):
+            return super().redact(payload)
+
+    r = SecurityPipeline(redactor=Legacy()).guard(Action("llm", "chat", USER), "mail jane@example.com")
+    assert r.payload == "mail [EMAIL]"
