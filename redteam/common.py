@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from datasec.errors import DataSecError
 from datasec.pipeline import GuardResult, SecurityPipeline
 from datasec.policy import Action, Effect
 
@@ -39,3 +41,14 @@ def outcome(result: GuardResult) -> str:
     return {Effect.DENY: "blocked", Effect.REDACT: "redacted", Effect.ALLOW: "allowed"}[
         result.decision.effect
     ]
+
+
+@functools.lru_cache(maxsize=1)
+def presidio_pipeline() -> SecurityPipeline | None:
+    """A pipeline with the NER redactor, loaded once; None when the optional extra/model is absent."""
+    try:
+        from datasec.presidio import PresidioRedactor
+
+        return SecurityPipeline(redactor=PresidioRedactor())
+    except DataSecError:
+        return None
