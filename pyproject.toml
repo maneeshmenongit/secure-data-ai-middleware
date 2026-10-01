@@ -26,4 +26,8 @@ packages = ["src/datasec"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-markers = ["presidio: needs the optional presidio extra and the en_core_web_lg model"]
+markers = [
+    "presidio: needs the optional presidio extra and the en_core_web_lg model",
+    "live: calls real LLM APIs with keys from .env; opt in with -m live",
+]
+addopts = ["-m", "not live"]
