@@ -7,9 +7,10 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Literal
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from datasec.audit import AuditLog
@@ -22,6 +23,14 @@ from .scenarios import BY_ID, SCENARIOS
 from .sinks import Sinks
 
 STATIC = Path(__file__).with_name("static")
+LOCAL_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _hostname(netloc: str) -> str | None:
+    try:
+        return urlsplit("//" + netloc).hostname
+    except ValueError:
+        return None
 
 
 def default_pipeline() -> SecurityPipeline:
@@ -46,6 +55,24 @@ def create_app(
     *, pipeline_factory: Callable[[], SecurityPipeline] | None = None, llm_factory: Callable | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DataSec Demo Console", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.middleware("http")
+    async def local_only(request: Request, call_next):
+        # Host check stops DNS rebinding (a remote page re-pointed at 127.0.0.1 would
+        # otherwise become same-origin and could spend the user's API keys).
+        if _hostname(request.headers.get("host", "")) not in LOCAL_HOSTNAMES:
+            return JSONResponse({"detail": "host not allowed"}, status_code=400)
+        if request.method == "POST":
+            # No cross-site writes: any page the user visits could otherwise POST here.
+            origin = request.headers.get("origin")
+            if origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTNAMES:
+                return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
+            if request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+                return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+            # JSON only: simple (no-preflight) form/text POSTs can't reach the API.
+            if request.headers.get("content-type", "").split(";")[0].strip() != "application/json":
+                return JSONResponse({"detail": "application/json required"}, status_code=415)
+        return await call_next(request)
     make_pipeline = pipeline_factory or default_pipeline
     llms = llm_factory or make_llm
     app.state.pipeline = make_pipeline()

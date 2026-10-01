@@ -105,3 +105,19 @@ def test_live_gemini():
         pytest.skip("no GEMINI_API_KEY")
     out = GeminiLLM().complete("Say 'ok'.")
     assert out and not out.startswith("[gemini")
+
+
+def test_gemini_client_gets_a_timeout(monkeypatch):
+    from google import genai
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.models = SimpleNamespace(generate_content=lambda **kw: SimpleNamespace(text="ok"))
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    assert GeminiLLM().complete("hi") == "ok"
+    assert seen["http_options"] == {"timeout": 30_000}

@@ -68,7 +68,7 @@ class GeminiLLM:
                 return "[gemini unavailable: missing GEMINI_API_KEY]"
             from google import genai
 
-            self._client = genai.Client(api_key=key)
+            self._client = genai.Client(api_key=key, http_options={"timeout": 30_000})  # ms
         try:
             response = self._client.models.generate_content(
                 model=self._model or os.environ.get("GEMINI_MODEL", GEMINI_DEFAULT),
