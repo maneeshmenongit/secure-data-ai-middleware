@@ -65,4 +65,6 @@ ATTACKS = [
            _over_ner_limit, "blocked", requires="presidio_analyzer"),
     Attack("R6.10", "resource_abuse", "LLM10", "200k one-char strings: ~1 ms of NER each (Presidio configured)",
            _many_short_strings, "blocked", requires="presidio_analyzer"),
+    Attack("R6.11", "resource_abuse", "LLM10", "1 MB of keyword-led account numbers and coordinates",
+           _timed("account number is 12345 lat 12.3456 " * 27_000), "bounded"),
 ]

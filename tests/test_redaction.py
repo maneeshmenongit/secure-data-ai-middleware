@@ -186,7 +186,7 @@ def test_ssn_with_dots_detected():
 
 
 def test_decimal_number_is_not_an_ssn():
-    assert R.scan("lat 123.456789") == {}
+    assert R.scan("value 123.456789") == {}  # dotted-SSN rule must not match decimals
 
 
 def test_integer_fields_as_bare_string_rejected():
@@ -203,3 +203,65 @@ def test_integer_field_scope_covers_nested_values():
     r = Redactor(scan_integers=True, integer_fields={"ssn"})
     payload = {"ssn": {"value": 123456789}, "other": {"value": 123456789}}
     assert r.redact(payload).payload == {"ssn": {"value": "[SSN]"}, "other": {"value": 123456789}}
+
+
+REPORTED = (
+    "Hi there my name is Maneesh and I live in 145 washington St, New Brunswick,  NJ 07922 and my phone "
+    "number is 8900192015. I could provide my lat 82.98635 and long  its  23.140745\n\n\nWould you be able "
+    "to connect to my payment method and pay my electricity bill and the account number is 59207220. Thanks"
+)
+
+
+def test_reported_message_regex_only():
+    out = R.redact(REPORTED).payload
+    # Regex alone can't recognise the city name ("New Brunswick"); everything else must go.
+    for raw in ["Maneesh", "145", "washington", "NJ", "07922", "82.98635", "23.140745", "59207220", "8900192015"]:
+        assert raw not in out
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("ship to 1600 Pennsylvania Ave today", "ship to [ADDRESS] today"),
+    ("at 22 Baker Street now", "at [ADDRESS] now"),
+    ("mail NJ 07922 ok", "mail [ZIP_CODE] ok"),
+    ("CA 94107-1234", "[ZIP_CODE]"),
+    ("lat 82.98635 long 23.140745", "lat [GEO_COORDINATE] long [GEO_COORDINATE]"),
+    ("meet at 40.7128, -74.0060", "meet at [GEO_COORDINATE]"),
+    ("the account number is 59207220.", "the account number is [ACCOUNT_NUMBER]."),
+    ("acct # 0012-3456-7890", "acct # [ACCOUNT_NUMBER]"),
+    ("the account number for the bill is 48213907.", "the account number for the bill is [ACCOUNT_NUMBER]."),
+    ("my name is Maneesh", "my name is [PERSON]"),
+    ("Hello, I'm Priya Raman here", "Hello, I'm [PERSON] here"),
+])
+def test_new_detectors(text, expected):
+    assert R.redact(text).payload == expected
+
+
+def test_location_links_the_rest_of_the_string():
+    out = R.redact("Office at 12 Elm Rd; zip 90210; pin 34.0901 in IL").payload
+    for raw in ["12 Elm", "90210", "34.0901", "IL"]:
+        assert raw not in out
+
+
+def test_adjacent_location_parts_merge_into_one_address():
+    assert R.redact("I live at 145 Main St, NJ 07922.").payload == "I live at [ADDRESS]."
+
+
+@pytest.mark.parametrize("text", [
+    "Version 1.2.3 costs $19.99, order 12345 shipped, pi is 3.14159",
+    "I am Happy to help, OK?",
+    "This is Monday's report: 42 items, 98.6 percent done",
+    "It's a 5 minute drive, then 3 days on the road",
+    "it took long, about 12.75 hours",
+])
+def test_no_location_means_no_aggressive_rules(text):
+    assert R.redact(text).payload == text
+
+
+@pytest.mark.parametrize("text,raw", [
+    ("long its 23.140745. Next", "23.140745"),
+    ("at 40.7128, -74.0060.", "40.7128"),
+    ("Lives at 12 Elm Rd; zip 90210.", "90210"),
+    ("Lives at 12 Elm Rd, pin 34.0901.", "34.0901"),
+])
+def test_sentence_ending_period_does_not_hide_numbers(text, raw):
+    assert raw not in R.redact(text).payload

@@ -24,7 +24,9 @@ def go(scenario_id, protection, llm=None):
 
 
 def test_presets_are_well_formed():
-    assert {s.id for s in SCENARIOS} == {"pii-chat", "injected-page", "tool-reply", "secret-response", "csv-rows"}
+    assert {s.id for s in SCENARIOS} == {
+        "pii-chat", "injected-page", "tool-reply", "secret-response", "home-address", "csv-rows",
+    }
     for s in SCENARIOS:
         assert s.origin in ORIGINS and s.sink in SINKS and s.text and s.explain
 
@@ -102,3 +104,9 @@ def test_unknown_origin_or_sink_rejected():
         run(SecurityPipeline(), Sinks(), Echo(), text="x", origin="martian", sink="llm", protection=True)
     with pytest.raises(ValueError):
         run(SecurityPipeline(), Sinks(), Echo(), text="x", origin="user", sink="exfil", protection=True)
+
+
+def test_home_address_fully_redacted():
+    r, _, _ = go("home-address", True)
+    for raw in ["221", "baker", "07030", "40.74399", "-74.03236", "48213907", "Priya"]:
+        assert raw not in r.delivered

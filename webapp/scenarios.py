@@ -42,6 +42,13 @@ SCENARIOS: tuple[Scenario, ...] = (
         "A secret-labelled value heads out in a response. Protection denies it outright.",
     ),
     Scenario(
+        "home-address", "Home address, coordinates, account", "user", "llm",
+        "Hi, my name is Priya and I live at 221 baker St, Hoboken, NJ 07030. My lat is 40.74399 and "
+        "long -74.03236, and the account number for the bill is 48213907.",
+        "Location is all-or-nothing: street, city, state and ZIP collapse into one [ADDRESS], and the "
+        "coordinates and account number go too.",
+    ),
+    Scenario(
         "csv-rows", "CSV rows to the LLM", "user", "llm",
         "name,email,phone\nAngela Merkel,angela@example.com,555-123-4567\n"
         "Barack Obama,barack@example.com,555-987-6543",

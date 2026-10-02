@@ -55,13 +55,71 @@ class Detector:
     label: str
     pattern: re.Pattern[str]
     validate: Callable[[str], bool] | None = None
+    group: int = 0  # redact only this capture group (keyword context stays readable)
 
 
 # Every pattern is anchored by a lookbehind and uses bounded repeats, so each
 # start position does constant work and a scan is linear in the input size.
 _OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_US_STATES = (
+    "AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|"
+    "NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|PR"
+)
+# Words that follow "I am" / "I'm" but are not names.
+_NOT_NAMES = frozenset(
+    "Happy Sorry Here Not Fine Good Glad Ready Sure Interested Available Back In On The A An Looking "
+    "Writing Calling Trying Going So Very Also Still Just Currently Afraid Unable Able New Done".split()
+)
+
+
+def _is_name(match: str) -> bool:
+    return match.split()[0] not in _NOT_NAMES
 
 DEFAULT_DETECTORS: tuple[Detector, ...] = (
+    # Self-introductions: "my name is Maneesh", "I'm Priya Raman". The name must be capitalised.
+    Detector(
+        "PERSON",
+        re.compile(
+            r"(?i:\b(?:my name is|my name's|i am|i'm|i\u2019m|call me|name[ \t]{0,2}:))"
+            r"[ \t]{1,3}([A-Z][a-z]{1,30}(?:[ \t][A-Z][a-z]{1,30})?)\b"
+        ),
+        _is_name, group=1,
+    ),
+    # Account / routing / IBAN numbers, recognised by the keyword in front of them.
+    Detector(
+        "ACCOUNT_NUMBER",
+        re.compile(
+            r"(?i:\b(?:account|acct|a/c|routing|iban)\b(?:[ \t]{0,3}(?:number|num|no\.?|#|id))?"
+            r"(?:[ \t]{1,3}[a-z]{1,12}){0,4}?"  # "for the bill" between keyword and number
+            r"(?:[ \t]{0,3}(?:is|:|=))?)[ \t]{0,3}(\d[\d -]{4,24}\d)(?!\d)"
+        ),
+        group=1,
+    ),
+    # Street address: house number, up to 4 words, a street suffix. Abbreviations match in any
+    # case; full words must be capitalised so "a 5 minute drive" is not an address.
+    Detector(
+        "ADDRESS",
+        re.compile(
+            r"(?<![\w.])\d{1,6}[ \t]{1,3}(?:[A-Za-z][A-Za-z.'-]{0,29}[ \t]{1,3}){0,4}?"
+            r"(?:(?i:st|ave|rd|blvd|ln|dr|pkwy|hwy|ct|ter)\b\.?"
+            r"|(?:Street|Avenue|Road|Boulevard|Lane|Drive|Parkway|Highway|Court|Terrace|Way|Place)\b)"
+        ),
+    ),
+    # US state code + ZIP ("NJ 07922", "CA 94107-1234").
+    Detector("ZIP_CODE", re.compile(rf"\b(?:{_US_STATES})[ \t]{{1,3}}\d{{5}}(?:-\d{{4}})?(?!\d)")),
+    # Coordinates: a "lat, long" pair, or a precise decimal after a geo keyword.
+    Detector(
+        "GEO_COORDINATE",
+        re.compile(r"(?<![\d.])-?\d{1,3}\.\d{3,12}[ \t]{0,3},[ \t]{0,3}-?\d{1,3}\.\d{3,12}(?!\.?\d)"),
+    ),
+    Detector(
+        "GEO_COORDINATE",
+        re.compile(
+            r"(?i:\b(?:lat(?:itude)?|lon(?:g(?:itude)?)?|lng|coord(?:inate)?s?|gps)\b)"
+            r"[^\d\n-]{0,20}(-?\d{1,3}\.\d{3,12})(?!\.?\d)"
+        ),
+        group=1,
+    ),
     Detector(
         "EMAIL",
         re.compile(
@@ -183,7 +241,7 @@ class Redactor:
         return value if redacted == text else redacted
 
     def _redact_text(self, text: str, found: Counter[str], *, ner: bool = False) -> str:
-        return self._redact_spans(text, found)[0]
+        return link_locations(self._redact_spans(text, found)[0], found)
 
     def _redact_spans(self, text: str, found: Counter[str]) -> tuple[str, list[tuple[int, int]]]:
         """Regex redaction. Also returns where each placeholder sits in the output, so a
@@ -193,10 +251,10 @@ class Redactor:
         spans: list[tuple[int, int, str]] = []
         for det in self.detectors:
             for m in det.pattern.finditer(text):
-                start, end = m.span()
+                start, end = m.span(det.group)
                 if any(claimed[start:end]):
                     continue
-                if det.validate is not None and not det.validate(m.group()):
+                if det.validate is not None and not det.validate(m.group(det.group)):
                     continue
                 claimed[start:end] = b"\x01" * (end - start)
                 spans.append((start, end, det.label))
@@ -217,3 +275,31 @@ class Redactor:
             pos = end
         parts.append(text[pos:])
         return "".join(parts), placed
+
+
+# ---- Location linking -------------------------------------------------------------------
+# Location is all-or-nothing: once a string reveals any location, the leftover fragments
+# (a bare ZIP, a state code, precise coordinates, a house number) re-identify it, so they go
+# too, and adjacent pieces merge into one [ADDRESS] so even the shape doesn't leak. Strings
+# with no location keep the conservative rules above.
+_LOCATION_PLACEHOLDER = re.compile(r"\[(?:LOCATION|ADDRESS|ZIP_CODE|GEO_COORDINATE)\]")
+_LINKED = (
+    ("ADDRESS", re.compile(r"(?<![\d.])\d{1,6}(?=[ \t]{1,3}\[(?:LOCATION|ADDRESS)\])")),
+    ("ZIP_CODE", re.compile(r"(?<![\d.])\d{5}(?:-\d{4})?(?!\.?\d)")),
+    ("GEO_COORDINATE", re.compile(r"(?<![\d.])-?\d{1,3}\.\d{4,12}(?!\.?\d)")),
+    ("LOCATION", re.compile(rf"\b(?:{_US_STATES})\b")),
+)
+_ADDRESS_RUN = re.compile(
+    r"\[(?:LOCATION|ADDRESS|ZIP_CODE)\](?:[ \t]{0,3},?[ \t]{0,3}\[(?:LOCATION|ADDRESS|ZIP_CODE)\])+"
+)
+
+
+def link_locations(text: str, found: Counter[str]) -> str:
+    if not _LOCATION_PLACEHOLDER.search(text):
+        return text
+    for label, pattern in _LINKED:
+        text, n = pattern.subn(f"[{label}]", text)
+        if n:
+            found[label] += n
+    return _ADDRESS_RUN.sub("[ADDRESS]", text)
+
