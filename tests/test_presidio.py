@@ -146,3 +146,13 @@ def test_total_ner_chars_budget(ner):
     r = SecurityPipeline(redactor=ner).guard(Action("llm", "chat", USER), ["word " * 3000] * 10)
     assert not r.allowed
     assert r.decision.reason == "scan failed"
+
+
+def test_reported_message_with_presidio(ner):
+    from tests.test_redaction import REPORTED
+
+    out = ner.redact(REPORTED).payload
+    for raw in ["Maneesh", "145", "washington", "New Brunswick", "NJ", "07922",
+                "82.98635", "23.140745", "59207220", "8900192015"]:
+        assert raw not in out
+    assert "[ADDRESS]" in out

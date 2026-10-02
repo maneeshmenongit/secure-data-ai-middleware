@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from typing import Any, Iterable, Iterator
 
 from .errors import DataSecError, RedactionError
-from .redaction import DEFAULT_DETECTORS, Detector, RedactionResult, Redactor
+from .redaction import DEFAULT_DETECTORS, Detector, RedactionResult, Redactor, link_locations
 
 INSTALL_HINT = "pip install 'datasec[presidio]' && python -m spacy download {model}"
 
@@ -120,7 +120,7 @@ class PresidioRedactor(Redactor):
     def _redact_text(self, text: str, found: Counter[str], *, ner: bool = False) -> str:
         text, placeholders = self._redact_spans(text, found)
         if not ner or not text.strip():
-            return text
+            return link_locations(text, found)
         if len(text) > self.ner_max_chars:
             raise RedactionError("text too long for NER")
         budget = _BUDGET.get()
@@ -151,7 +151,7 @@ class PresidioRedactor(Redactor):
             if runs:
                 found[r.entity_type] += 1
         if not spans:
-            return text
+            return link_locations(text, found)
         spans.sort()
         parts: list[str] = []
         pos = 0
@@ -160,4 +160,4 @@ class PresidioRedactor(Redactor):
             parts.append(f"[{label}]")
             pos = end
         parts.append(text[pos:])
-        return "".join(parts)
+        return link_locations("".join(parts), found)
