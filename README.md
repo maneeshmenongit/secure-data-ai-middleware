@@ -25,6 +25,17 @@ result = pipeline.guard(Action("llm", "chat", msg.provenance), msg.value)
 result.payload   # 'Email me at [EMAIL]'
 ```
 
+## See it work (demo console)
+
+```bash
+uv sync --extra presidio --group presidio-model --group webapp
+uv run --group webapp python -m webapp        # http://127.0.0.1:8000 (local only)
+```
+
+Pick a scenario, flip **Protection**, run it again, and compare what reached the LLM or tool.
+The LLM picker uses `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` from `.env` when present; `mock` needs
+no key. All data is synthetic, and the payment tool is a mock that only records calls.
+
 ## Configuration (Phase 2)
 
 ```python
