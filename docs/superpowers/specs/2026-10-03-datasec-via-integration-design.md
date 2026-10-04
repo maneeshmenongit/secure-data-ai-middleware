@@ -1,6 +1,6 @@
 # DataSec Phase 3A — Via Host Integration Design
 
-**Date:** 2026-10-03 · **Status:** awaiting review · **Parents:** DESIGN.md §3.4, §6, §8 · **Target:** `~/PycharmProjects/via-skelton`
+**Date:** 2026-10-03 · **Status:** approved 2026-10-04 · **Parents:** DESIGN.md §3.4, §6, §8 · **Target:** `~/PycharmProjects/via-skelton`
 
 ## 1. Phase 3 shape: three sub-projects
 
