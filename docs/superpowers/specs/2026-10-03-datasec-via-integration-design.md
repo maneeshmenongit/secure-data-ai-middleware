@@ -17,7 +17,7 @@ A survey of Via shows it is a stdlib-only CLI and batch system with its own agen
 ## 2. Scope and constraints
 
 - **This repo (`datasec`):** a shadow-mode marker, a small `adapters.gate` helper, and an audit report CLI.
-- **`via-skelton`:** a feature branch `feat/datasec` that wires four hook points behind `VIA_DATASEC=1`. It is **off by default**. Nothing merges in Via without the user's review.
+- **`via-skelton`:** **not edited from this repo.** The Via-side work in §4 is delivered as a handoff prompt, `docs/handoffs/YYYY-MM-DD-PROMPT_via_datasec_3A.md`, which follows Via's `PROMPT_*.md` convention. The user takes it to a `via-skelton` thread. That thread creates the branch (for example `feat/datasec`) and wires four hook points behind `VIA_DATASEC=1`, **off by default**. Nothing merges in Via without the user's review. (User decision, 2026-10-04.)
 - **Rollout mode:**
   - **Enforce** on egress: `llm` and `third_party`.
   - **Shadow** on `tool:privileged` and `memory:write`. These are audited as would-deny but never blocked, until shadow data from real runs has been used to tune the trust mapping.
@@ -57,7 +57,7 @@ This prints:
 
 It verifies the chain first (and the checkpoint, when one is given) and says so. It exits non-zero on a broken chain.
 
-## 4. Via changes (branch `feat/datasec`)
+## 4. Via changes — specified here, implemented by a Via thread from the handoff prompt
 
 ### 4.1 `via/security/datasec_bridge.py` (the only module that imports `datasec`)
 
@@ -149,7 +149,13 @@ DataSec reports to PulseWise the same way Via's other instruments do.
 
 - DESIGN.md §6 and §8: Phase 3 becomes A (Via host), B (LangGraph and `paper-trader`) and C (ASGI), each with its own cycle.
 - §10.7, provenance persistence: partly answered. Memory rows already carry `provenance`, and prompts now carry it in memory.
-- Via branch `INTEGRATION.md`: the flag, environment variables, modes, the trust table, and how to read the report and flip modes.
+- **The handoff prompt is the deliverable for the Via side.** It must be self-contained for a fresh Via thread, and must contain:
+  - First line `# [YYYY-MM-DD] <context>`.
+  - The read order (this spec, Via's own `via-onboard` / `via-code` skills).
+  - The exact `datasec` API, at a pinned commit, with how to install it into Via's venv.
+  - §4.1–§4.5 as tasks, plus the §5 Via test list as its done-criteria.
+  - The traps: Via's suite stays green with the flag off; no live Via runs; Via's own budget and signing rules apply.
+  - An instruction for that thread to write `INTEGRATION.md` (flag, env vars, modes, trust table, reading the report, flipping modes).
 
 ## 7. Out of scope
 
