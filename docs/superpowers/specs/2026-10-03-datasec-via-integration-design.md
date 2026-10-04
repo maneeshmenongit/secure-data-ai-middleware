@@ -105,7 +105,7 @@ Line numbers come from the survey. The plan re-verifies them against the branch 
 Via runs many projects, so security configuration is **per project**. The bridge is configured once per run with the project name (`args.project`, which is the same prefix Via uses for memory frames).
 
 - **Profile file:** `data/datasec/<project>.json`. It is optional, and when it is missing the bridge defaults apply. It can set:
-  - `modes`: per sink, `enforce` or `shadow`. The defaults are `llm` and `third_party` enforce; `tool:privileged` and `memory:write` shadow.
+  - `modes`: `enforce` or `shadow` for `tool:privileged` and `memory:write` only (default: shadow). **Egress (`llm`, `third_party`) is always enforced.** A profile that sets either one to shadow is invalid, which is a startup error. One config line can never turn off PII redaction or secret blocking. (User decision, 2026-10-04.)
   - `trust_overrides`: entries that replace rows of the §4.1 table for this project only.
   - `egress_allowlist`: hosts this project may reach, added to the provider hosts.
   - `presidio`: `true`, `false` or `auto`.
