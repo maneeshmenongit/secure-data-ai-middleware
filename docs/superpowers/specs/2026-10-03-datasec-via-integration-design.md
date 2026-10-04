@@ -64,7 +64,7 @@ It verifies the chain first (and the checkpoint, when one is given) and says so.
 - `enabled()` returns true when `VIA_DATASEC=1`.
 - `build_pipeline()` assembles the pipeline from these parts:
   - `PresidioRedactor` if it is installed, otherwise the regex `Redactor`.
-  - `AuditLog` at `$VIA_DATASEC_AUDIT`, defaulting to `data/datasec-audit.jsonl`.
+  - **The project's own** `AuditLog` at `data/datasec/<project>/audit.jsonl` (§4.4). `$VIA_DATASEC_DIR` overrides the `data/datasec` root.
   - A signed checkpoint and a `LocalKeyProvider` **only** when `DATASEC_KEY_K1` is set and `cryptography` is importable. Otherwise the audit is chain-only, with a one-time warning.
   - `default_rules(egress_allowlist=...)`. The allowlist holds the provider hosts Via is configured for, plus the PulseWise host when `VIA_PULSEWISE_ENDPOINT` is set.
 - **The trust mapping is a single table in this module.** This is a first draft, to be tuned from shadow data:
