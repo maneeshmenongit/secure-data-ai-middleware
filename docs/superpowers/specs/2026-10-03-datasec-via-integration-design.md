@@ -1,17 +1,18 @@
-# DataSec Phase 3 — Via Integration Design
+# DataSec Phase 3A — Via Host Integration Design
 
 **Date:** 2026-10-03 · **Status:** awaiting review · **Parents:** DESIGN.md §3.4, §6, §8 · **Target:** `~/PycharmProjects/via-skelton`
 
-## 1. Why the target changed
+## 1. Phase 3 shape: three sub-projects
 
-DESIGN §6 planned `adapters/asgi.py` and `adapters/langgraph.py`. A read-only survey of Via found it has **neither** an HTTP server nor LangGraph:
-- It is a stdlib-only CLI and batch system (`via kickoff`, `via run`).
-- It has its own agent loop (`via/loop/engine.py`).
-- It talks to LLM providers through its own REST adapters (`via/substrate/providers/`).
+DESIGN §6 planned an ASGI adapter and a LangGraph adapter. Via, however, is a **host**. It is an autonomous agent with memory that runs many projects, and it already plugs in middlewares (PulseWise for analytics, with HonedWise among the projects it runs). The projects Via runs have their own stacks. For example, `paper-trader` is a multi-agent LangGraph system whose untrusted news and market data can reach a trade-execution agent. Security therefore has to work at two levels, so Phase 3 has three sub-projects, each with its own spec → plan → build cycle:
 
-Phase 3 is therefore retargeted at Via's real interception points. The ASGI and LangGraph adapters are deferred until something uses them.
+| Sub-project | What it protects | Cycle |
+|---|---|---|
+| **A — Via host** (this spec) | Via's own operations for **every** project it runs: prompts, tool execution, memory and provider traffic. It is configured **per project** and reports to PulseWise like Via's other instruments. | now |
+| **B — LangGraph adapter** | Multi-agent projects. Trust travels through graph state, so a research agent's fetched content can't drive an execute or trade agent. It will be piloted on `paper-trader` behind a flag. | next |
+| **C — ASGI adapter** | Projects Via builds that serve HTTP. | after B |
 
-Via and the `datasec` core are both stdlib-only, so there is no dependency clash.
+A survey of Via shows it is a stdlib-only CLI and batch system with its own agent loop (`via/loop/engine.py`) and its own REST provider adapters (`via/substrate/providers/`). A therefore hooks Via's own choke points rather than a framework. Via and the `datasec` core are both stdlib-only, so there is no dependency clash.
 
 ## 2. Scope and constraints
 
@@ -99,6 +100,28 @@ It verifies the chain first (and the checkpoint, when one is given) and says so.
 
 Line numbers come from the survey. The plan re-verifies them against the branch head.
 
+### 4.4 Per-project profiles
+
+Via runs many projects, so security configuration is **per project**. The bridge is configured once per run with the project name (`args.project`, which is the same prefix Via uses for memory frames).
+
+- **Profile file:** `data/datasec/<project>.json`. It is optional, and when it is missing the bridge defaults apply. It can set:
+  - `modes`: per sink, `enforce` or `shadow`. The defaults are `llm` and `third_party` enforce; `tool:privileged` and `memory:write` shadow.
+  - `trust_overrides`: entries that replace rows of the §4.1 table for this project only.
+  - `egress_allowlist`: hosts this project may reach, added to the provider hosts.
+  - `presidio`: `true`, `false` or `auto`.
+- **Audit log per project:** `data/datasec/<project>/audit.jsonl`, plus `audit.checkpoint` when keys are available. Each project's evidence chain is separate, and `python -m datasec.report` runs against one project's log.
+- **Bad profile:** an invalid profile file is a startup error when the flag is on. It is never silently ignored.
+
+### 4.5 PulseWise metrics
+
+DataSec reports to PulseWise the same way Via's other instruments do.
+
+- **When:** at run close, next to `_audit_after_run`.
+- **How:** the bridge emits one summary event through the existing `PulseWiseEmitter.from_env().emit(content=…, frame=f"{project}/security", run_id=…)`.
+- **What:** counts only. These are decisions by sink × effect × mode, shadow denials by rule, redactions by label, and whether the chain verified. It **never sends payload text, sources or names.**
+- **When PulseWise is off:** if the emitter is disabled (no `VIA_PULSEWISE_ENDPOINT`), this is a no-op.
+- **What the plan must check:** the exact `content` shape PulseWise accepts (`to_pulse_event`). Changing PulseWise itself is out of scope.
+
 ## 5. Testing
 
 **`datasec`** (TDD, in this repo):
@@ -116,12 +139,15 @@ Line numbers come from the survey. The plan re-verifies them against the branch 
 - An unknown transport host is refused.
 - The PulseWise payload is redacted.
 - `VIA_DATASEC=1` without `datasec` importable refuses to start.
+- Two projects get separate audit logs and their own profile modes. Setting `"tool:privileged": "enforce"` in one project's profile blocks there but stays shadow in the other.
+- An invalid profile is a startup error.
+- The run-close PulseWise summary uses a fake emitter. It contains counts and no payload text, and it is a no-op when the emitter is disabled.
 
 **Manual (user):** one real `via run` with the flag on, followed by `python -m datasec.report` to review the shadow denials before enabling enforcement.
 
 ## 6. Docs
 
-- DESIGN.md §6 and §8: Phase 3 is now the Via integration; ASGI and LangGraph are deferred.
+- DESIGN.md §6 and §8: Phase 3 becomes A (Via host), B (LangGraph and `paper-trader`) and C (ASGI), each with its own cycle.
 - §10.7, provenance persistence: partly answered. Memory rows already carry `provenance`, and prompts now carry it in memory.
 - Via branch `INTEGRATION.md`: the flag, environment variables, modes, the trust table, and how to read the report and flip modes.
 
@@ -129,5 +155,5 @@ Line numbers come from the survey. The plan re-verifies them against the branch 
 
 - Enforcing on tools and memory. That is a later flag flip, after tuning.
 - Sealing secrets in Via memory. Via has no secret labels yet.
-- ASGI and LangGraph adapters.
+- The LangGraph adapter and the `paper-trader` pilot (sub-project B), and the ASGI adapter (sub-project C).
 - Any change to Via's own gate, budget, or authentication.
