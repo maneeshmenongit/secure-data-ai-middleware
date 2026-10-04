@@ -31,4 +31,4 @@ Core `src/datasec` stays stdlib-only (`dependencies = []`).
 - Never push or merge without the user choosing it.
 
 ## 5. Via-related work
-Via (`~/PycharmProjects/via-skelton`) is a host running many projects (e.g. `paper-trader`, LangGraph) with its own skills in `.claude/skills/`. Touch it only on a user-approved branch, behind a flag, Via's suite green with the flag off; never start Via runs (they spend the user's budget).
+Via (`~/PycharmProjects/via-skelton`) is a host running many projects (e.g. `paper-trader`, LangGraph) with its own skills in `.claude/skills/`. **Never edit Via from this repo** — read it (read-only) to design, then hand the Via-side work over as a prompt: `docs/handoffs/YYYY-MM-DD-PROMPT_<topic>.md`, first line `# [YYYY-MM-DD] <context>`, self-contained for a fresh Via thread (read order, pinned datasec API + install, tasks, done-criteria/tests, traps). The user runs it in a Via thread. Never start Via runs (they spend the user's budget).
