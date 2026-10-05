@@ -9,7 +9,7 @@ from typing import Any
 from .audit import AuditLog
 from .crypto import KeyProvider, seal
 from .errors import DataSecError, UnsupportedPayload
-from .policy import EGRESS, KNOWN_SINKS, Action, Decision, Effect, PolicyEngine, default_rules
+from .policy import EGRESS, KNOWN_SINKS, SHADOWABLE, Action, Decision, Effect, PolicyEngine, default_rules
 from .provenance import Provenance
 from .redaction import Redactor
 
@@ -94,6 +94,8 @@ class SecurityPipeline:
             out, decision, extra = self._seal(out, decision)
         if action.destination is not None:
             extra = {**extra, "destination": self._safe(action.destination, ner=True)}
+        if action.shadow is True and action.sink in SHADOWABLE:
+            extra = {**extra, "mode": "shadow"}  # audit marker only; the decision is unchanged
         self._record(action, decision, tally, extra)
         return GuardResult(decision.effect is not Effect.DENY, out, decision)
 

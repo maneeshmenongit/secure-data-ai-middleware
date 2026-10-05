@@ -223,12 +223,15 @@ class AuditLog:
 
 def _read_entries(path: Path) -> list[AuditEntry]:
     entries: list[AuditEntry] = []
-    with path.open(encoding="utf-8") as f:
-        for n, line in enumerate(f, start=1):
-            if not line.strip():
-                continue
-            try:
-                entries.append(AuditEntry(**json.loads(line)))
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise DataSecError(f"corrupt audit log at line {n}") from exc
+    try:
+        with path.open(encoding="utf-8") as f:
+            for n, line in enumerate(f, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    entries.append(AuditEntry(**json.loads(line)))
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise DataSecError(f"corrupt audit log at line {n}") from exc
+    except UnicodeDecodeError as exc:
+        raise DataSecError(f"corrupt audit log {path}: not UTF-8") from exc
     return entries

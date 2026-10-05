@@ -160,6 +160,26 @@ def _replay_old_checkpoint():
         return "undetected"
 
 
+def _report_flags_tampering():
+    from datasec.report import main as report_main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "audit.jsonl"
+        p = SecurityPipeline(audit=AuditLog(path))
+        _record_three(p)
+        lines = path.read_text().splitlines()
+        first = json.loads(lines[0])
+        first["effect"] = "allow"
+        lines[0] = json.dumps(first, sort_keys=True)
+        path.write_text("\n".join(lines) + "\n")
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = report_main([str(path)])
+        return "detected" if code != 0 else "undetected"
+
+
 ATTACKS = [
     Attack("R4.1", "audit_tampering", "n/a", "flip a DENY to allow in place",
            _tamper(_flip_denial, pin_head=False), "detected"),
@@ -192,4 +212,6 @@ ATTACKS = [
            _startup(_rewrite_chain, _forge_via_seal_oracle), "detected"),
     Attack("R4g.3", "audit_tampering", "n/a", "replay an older genuine checkpoint after truncating the tail",
            _replay_old_checkpoint, "known_gap"),
+    Attack("R4.13", "audit_tampering", "n/a", "flip a denial to allow and see if the report notices",
+           _report_flags_tampering, "detected"),
 ]
