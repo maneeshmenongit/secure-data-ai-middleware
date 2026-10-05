@@ -60,3 +60,34 @@ def test_enforce_strips_caller_shadow_flag():
 def test_mode_must_be_a_mode():
     with pytest.raises(TypeError):
         check(SecurityPipeline(), Action("llm", "chat", SVC), "hi", "shadow")
+
+
+@pytest.mark.parametrize(
+    "sink", ["LLM", " llm", "llm\n", "openai", "third-party", "http_response", "tool:readonly", "exfil", ["llm"]],
+    ids=lambda s: repr(s),
+)
+def test_shadow_only_for_tool_and_memory(sink):
+    p = SecurityPipeline()
+    with pytest.raises(ValueError):
+        check(p, Action(sink, "x", USER), "mail jane@example.com", Mode.SHADOW)
+    assert len(p.audit) == 0
+
+
+def test_shadow_refused_for_secret_memory_write():
+    p = SecurityPipeline()
+    secret = internal("", source="vault", labels="secret").provenance
+    with pytest.raises(ValueError):
+        check(p, Action("memory:write", "note", secret), "sk-live-123", Mode.SHADOW)
+    assert len(p.audit) == 0
+
+
+def test_blocked_never_carries_raw_pii():
+    from datasec.policy import PolicyEngine, default_rules
+
+    p = SecurityPipeline(engine=PolicyEngine(default_rules(egress_allowlist={"api.example"})))
+    action = Action("third_party", "post", SVC, destination="evil.example/?email=jane@example.com")
+    with pytest.raises(Blocked) as exc:
+        check(p, action, "hi", Mode.ENFORCE)
+    assert "jane@example.com" not in str(exc.value)
+    assert "jane@example.com" not in exc.value.decision.reason
+    assert "jane@example.com" not in last(p).reason

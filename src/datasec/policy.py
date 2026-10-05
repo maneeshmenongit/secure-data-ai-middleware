@@ -11,6 +11,8 @@ from .provenance import Provenance, TrustLevel
 EGRESS = frozenset({"llm", "third_party", "http:response"})
 PRIVILEGED = frozenset({"tool:privileged", "third_party", "memory:write"})
 KNOWN_SINKS = EGRESS | PRIVILEGED | {"tool:readonly"}
+# The only sinks a host may run in shadow (observe-only) mode. Egress is always enforced.
+SHADOWABLE = frozenset({"tool:privileged", "memory:write"})
 
 # Sources exempt from the low-trust rule. EXTERNAL only: UNTRUSTED is never exempt.
 PRIVILEGED_SOURCE_ALLOWLIST: frozenset[str] = frozenset()
@@ -120,7 +122,8 @@ def _egress_allowlist(allowlist: Iterable[str]) -> Callable[[Action], Decision |
         # A non-str destination raises here; the engine turns that into DENY.
         if action.destination.strip().lower() in allowed:
             return None
-        return Decision(Effect.DENY, f"egress to {action.destination} not allowlisted", "egress_allowlist")
+        # The destination itself is in the audit's extra (redacted); never echo it in the reason.
+        return Decision(Effect.DENY, "egress destination not allowlisted", "egress_allowlist")
 
     return check
 

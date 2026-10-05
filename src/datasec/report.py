@@ -16,6 +16,11 @@ from .audit import AuditEntry, AuditLog, SignedCheckpoint
 from .errors import DataSecError
 
 
+def _clean(value: object) -> str:
+    """Escape newlines/ANSI so caller-controlled strings can't forge report lines."""
+    return str(value).encode("unicode_escape").decode("ascii")
+
+
 def _mode(e: AuditEntry) -> str:
     return e.extra.get("mode", "enforce")  # entries from before shadow mode are enforce
 
@@ -40,7 +45,11 @@ def _checkpoint_status(log: AuditLog, cp_path: str, key_env: str) -> bool:
     key = os.environ.get(key_env)
     if not key:
         raise DataSecError(f"env var {key_env} is not set")
-    return log.verify(checkpoint=cp, verifier=LocalKeyProvider({cp.key_id: key.encode()}))
+    try:
+        verifier = LocalKeyProvider({cp.key_id: key.encode()})
+    except ValueError as exc:  # malformed Fernet key
+        raise DataSecError(f"env var {key_env} does not hold a valid key") from exc
+    return log.verify(checkpoint=cp, verifier=verifier)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,20 +70,20 @@ def main(argv: list[str] | None = None) -> int:
             cp_ok = _checkpoint_status(log, args.checkpoint, args.key_env or "DATASEC_KEY_K1")
         except DataSecError as exc:
             cp_ok = False
-            line += f"  ({exc})"
+            line += f"  ({_clean(exc)})"
         ok = ok and cp_ok
         line += f"  checkpoint: {'VERIFIED' if cp_ok else 'BROKEN'}"
     print(line)
     s = summarize(log)
     print("\ndecisions (sink / effect / mode):")
     for (sink, effect, mode), n in sorted(s["by_sink_effect_mode"].items()):
-        print(f"  {sink:18} {effect:7} {mode:8} {n}")
+        print(f"  {_clean(sink):18} {_clean(effect):7} {_clean(mode):8} {n}")
     print("\ntop deny reasons:")
     for (reason, rule), n in s["deny_reasons"].most_common(10):
-        print(f"  {n:4}  {reason}  [{rule}]")
+        print(f"  {n:4}  {_clean(reason)}  [{_clean(rule)}]")
     print("\nshadow denials (sink / source) — false-positive candidates to review:")
     for (sink, source), n in s["shadow_denials"].most_common():
-        print(f"  {sink:18} {source:24} {n}")
+        print(f"  {_clean(sink):18} {_clean(source):24} {n}")
     return 0 if ok else 1
 
 

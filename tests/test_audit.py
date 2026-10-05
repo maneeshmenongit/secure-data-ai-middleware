@@ -397,3 +397,10 @@ def test_load_with_checkpoint_verifies(tmp_path):
     write_lines(path, read_lines(path)[:-1])
     with pytest.raises(DataSecError):
         AuditLog.load(path, checkpoint=cp, verifier=signer)
+
+
+def test_non_utf8_log_raises_datasec_error(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    path.write_bytes(b"\xff\xfe\x00garbage\n")
+    with pytest.raises(DataSecError):
+        AuditLog.load(path)

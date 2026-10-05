@@ -73,6 +73,27 @@ def _enforce_gate_blocks():
     return "allowed"
 
 
+def _shadow_on_misspelled_egress():
+    for sink in ("LLM", " llm", "openai"):
+        try:
+            out = check(SecurityPipeline(), Action(sink, "chat", from_user("", source="u").provenance),
+                        "mail jane@example.com", Mode.SHADOW)
+        except ValueError:
+            continue
+        return "leaked" if "jane@example.com" in str(out) else "allowed"
+    return "blocked"
+
+
+def _blocked_error_echoes_pii():
+    p = SecurityPipeline(engine=PolicyEngine(default_rules(egress_allowlist={"api.example"})))
+    action = Action("third_party", "post", CLEAN.provenance, destination="evil.example/?email=jane@example.com")
+    try:
+        check(p, action, "hi", Mode.ENFORCE)
+    except Blocked as exc:
+        return "leaked" if "jane@example.com" in f"{exc} {exc.decision.reason}" else "blocked"
+    return "allowed"
+
+
 ATTACKS = [
     Attack("R5.1", "fail_closed", "LLM06", "upper-case sink 'LLM' to dodge egress rules", _sink("LLM"), "blocked"),
     Attack("R5.2", "fail_closed", "LLM06", "whitespace-padded sink ' llm'", _sink(" llm"), "blocked"),
@@ -91,4 +112,8 @@ ATTACKS = [
            _caller_shadow_flag_on_egress, "blocked"),
     Attack("R5.12", "fail_closed", "LLM06", "untrusted data through the ENFORCE gate to a privileged tool",
            _enforce_gate_blocks, "blocked"),
+    Attack("R5.13", "fail_closed", "LLM02", "shadow an egress sink by misspelling it ('LLM', ' llm', 'openai')",
+           _shadow_on_misspelled_egress, "blocked"),
+    Attack("R5.14", "fail_closed", "LLM02", "smuggle PII out through the text of a Blocked error",
+           _blocked_error_echoes_pii, "blocked"),
 ]

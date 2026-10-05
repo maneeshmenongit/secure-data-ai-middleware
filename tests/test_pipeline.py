@@ -491,3 +491,11 @@ def test_shadow_entries_keep_the_chain_verifiable(tmp_path):
     p.guard(Action("tool:privileged", "pay", WEB, shadow=True), "x")
     p.guard(Action("llm", "chat", SVC), "y")
     assert AuditLog.load(path).verify(expected_head=p.audit.head)
+
+
+def test_shadow_marker_only_on_shadowable_sinks():
+    p = SecurityPipeline()
+    p.guard(Action("llm", "chat", SVC, shadow=True), "hi")
+    assert "mode" not in last(p).extra
+    p.guard(Action("tool:privileged", "pay", WEB, shadow="no"), "x")
+    assert "mode" not in last(p).extra
