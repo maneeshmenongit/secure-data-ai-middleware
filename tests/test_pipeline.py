@@ -459,3 +459,35 @@ def test_subclass_overriding_redact_text_old_signature_still_works():
     assert Custom().redact("hi secret").payload == "hi [X]"
     p = SecurityPipeline(redactor=Custom())
     assert p.guard(Action("llm", "chat", USER), "hi secret").allowed
+
+
+def test_shadow_deny_is_marked_and_still_denied():
+    p = SecurityPipeline()
+    r = p.guard(Action("tool:privileged", "pay", WEB, shadow=True), "wire money")
+    assert not r.allowed and r.payload is None
+    assert r.decision.rule == "no_low_trust_to_privileged"
+    assert last(p).extra == {"mode": "shadow"}
+
+
+def test_non_shadow_entries_have_no_mode():
+    p = SecurityPipeline()
+    p.guard(Action("llm", "chat", SVC), "hi")
+    assert "mode" not in last(p).extra
+
+
+def test_shadow_flag_never_changes_the_decision():
+    secret = internal("", source="vault", labels="secret").provenance
+    for shadow in (False, True):
+        p = SecurityPipeline()
+        r = p.guard(Action("llm", "chat", secret, shadow=shadow), "sk-test-FAKE")
+        assert not r.allowed and r.decision.rule == "never_leak_secrets"
+        r = p.guard(Action("llm", "chat", USER, shadow=shadow), "mail jane@example.com")
+        assert r.payload == "mail [EMAIL]"
+
+
+def test_shadow_entries_keep_the_chain_verifiable(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    p = SecurityPipeline(audit=AuditLog(path))
+    p.guard(Action("tool:privileged", "pay", WEB, shadow=True), "x")
+    p.guard(Action("llm", "chat", SVC), "y")
+    assert AuditLog.load(path).verify(expected_head=p.audit.head)
