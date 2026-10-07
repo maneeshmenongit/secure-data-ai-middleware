@@ -37,7 +37,7 @@ check(pipeline, Action(sink, name, provenance), payload, Mode.ENFORCE)   # -> sa
 
 ## Evidence
 - Every control ships with unit tests **and** a red-team attack. The current suite has 87 attacks; each one fails if its control is removed.
-- Three whole-branch security reviews per phase found and fixed 2 critical and 15 important issues, each with a regression test.
+- Five whole-branch security reviews (Phase 1, Phase 2, NER, demo console, 3A) found and fixed **3 critical and 22 important** issues, each with a regression test.
 
 ## Known limits (documented, tested as open gaps)
 - **Hand-built trust.** Code that hand-builds `TRUSTED` provenance is trusted. Mitigation: only the integration's boundary assigns trust.
