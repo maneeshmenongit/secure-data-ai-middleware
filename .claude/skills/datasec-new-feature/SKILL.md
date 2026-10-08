@@ -30,5 +30,5 @@ Core `src/datasec` stays stdlib-only (`dependencies = []`).
 - Commit trailer: copy the attribution line from the session's system reminder verbatim. Never invent a model name.
 - Never push or merge without the user choosing it.
 
-## 5. Via-related work
-Via (`~/PycharmProjects/via-skelton`) is a host running many projects (e.g. `paper-trader`, LangGraph) with its own skills in `.claude/skills/`. **Never edit Via from this repo** — read it (read-only) to design, then hand the Via-side work over as a prompt: `docs/handoffs/YYYY-MM-DD-PROMPT_<topic>.md`, first line `# [YYYY-MM-DD] <context>`, self-contained for a fresh Via thread (read order, pinned datasec API + install, tasks, done-criteria/tests, traps). The user runs it in a Via thread. Never start Via runs (they spend the user's budget).
+## 5. External projects (Via, paper-trader, any other repo)
+Via (`~/PycharmProjects/via-skelton`) is a host running many projects (e.g. `paper-trader` at `~/PycharmProjects/paper-trader`, LangGraph). **Never edit any other repo from here** — the same rule covers Via, paper-trader and every project they run — read it (read-only) to design, then hand the Via-side work over as a prompt: `docs/handoffs/YYYY-MM-DD-PROMPT_<topic>.md`, first line `# [YYYY-MM-DD] <context>`, self-contained for a fresh Via thread (read order, pinned datasec API + install, tasks, done-criteria/tests, traps). The user runs it in a Via thread. Never start Via runs (they spend the user's budget).
