@@ -15,6 +15,7 @@ First line of your first reply: `[YYYY-MM-DD] <one-line context>`.
 2. **`docs_to_claude/` — gitignored, so `git log` cannot show it.** The user drops design-thread docs here (new specs, rulings, revised DESIGN.md). List newest first and read anything newer than the latest report:
    `ls -lt docs_to_claude/*/ | head -20`
 3. Latest `reports/*.md` (what the design thread was told) and open specs/plans in `docs/superpowers/`.
+4. **Paused designs: `docs/superpowers/brainstorms/*.md`.** A file marked `PAUSED` is a brainstorm a previous thread stopped mid-way. Its decisions are made, so don't re-ask them. Resume at the step and the next question it names. Treat its file:line facts about external repos as dated, and re-check them read-only before relying on them.
 
 ## 2. Verify state mechanically — never trust memory's numbers
 ```bash
@@ -30,4 +31,4 @@ If Presidio is missing the red team shows fewer defended + some skipped — say 
 - Unmerged branches here (`git branch --no-merged master`) and, for Via work, `git -C ~/PycharmProjects/via-skelton branch --no-merged` (Via is another active project: read-only unless the user approved a branch).
 
 ## 4. Report, then act
-One compact message: verified-state table (branch, unpushed count, tests, red team, Presidio), in-flight items, what the record says is next — and, separated, what needs the user (push, merge, reviews, decisions). Items memory marks **declined** (e.g. the out-of-band attack harness, deliberately vulnerable apps) are not "open work" — don't re-propose them.
+One compact message: verified-state table (branch, unpushed count, tests, red team, Presidio), in-flight items (including any paused brainstorm and the question it resumes at), what the record says is next — and, separated, what needs the user (push, merge, reviews, decisions). Items memory marks **declined** (e.g. the out-of-band attack harness, deliberately vulnerable apps) are not "open work" — don't re-propose them.

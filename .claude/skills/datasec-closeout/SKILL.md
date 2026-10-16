@@ -26,5 +26,16 @@ Whole-branch review by a fresh reviewer (most capable model) if not done; Critic
 - **Memory** `datasec-build-status.md`: update (don't duplicate) — what merged, pushed or not (`git log origin/master..master --oneline | wc -l`), fresh numbers, next step, and **declined/blocked items with why** (e.g. work Claude cannot author) so the next thread doesn't re-propose them.
 - Commits: explicit paths (no `-A`), trailer copied verbatim from the session's system reminder.
 
+## 3b. Closing mid-design (brainstorm not finished)
+Conversation context doesn't survive the thread, so write it down: `docs/superpowers/brainstorms/YYYY-MM-DD-datasec-<topic>.md`, marked `PAUSED`. Include:
+- the path (spike, bounded or architectural) and the branch
+- each decision made, **with the rejected options and why**
+- the facts gathered, with dates and file:line references (mark external-repo facts as read-only)
+- the questions still to ask, in order, with your leaning on each
+- any candidate shape, labelled not approved
+- one **Resume** line naming the step and the next question
+
+Once the spec is written, the spec supersedes the brainstorm file. Mark the file `SUPERSEDED by <spec path>`.
+
 ## 4. Closing message
 Verified-state table · what shipped (commit refs) · honest tally incl. your own defects · rulings and deferred minors · what's next · separated: what only the user can do (push, merge, decisions). If something is unfinished, say so — it goes in the report and memory as unfinished.
