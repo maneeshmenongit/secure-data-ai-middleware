@@ -3,7 +3,22 @@
 **Status:** PAUSED at brainstorming checklist step 3 (clarifying questions). Two decisions made. No spec, no plan, no code yet.
 **Path:** architectural (new adapter module here + an external pilot) — full spec → plan → Native execution → whole-branch review.
 **Branch:** `feat/langgraph-adapter` (no commits of its own yet; same as `master` when paused).
-**Resume:** invoke `superpowers:brainstorming`, say "resuming the paused 3B brainstorm at step 3", and ask **Q3** below. Do **not** re-ask D1 or D2.
+**ON HOLD (user, 2026-10-17)** until **both** of these are true:
+1. **The Via 3A handoff has been run.** The user runs `docs/handoffs/2026-10-05-PROMPT_via_datasec_3A.md` in a via-skelton thread.
+2. **The design thread's 3B doc is in `docs_to_claude/`.** The design thread wrote a 3B design after reading `reports/2026-10-16-phase3-progress-report.md`, and the user will drop it there.
+
+Work resumes in a **new thread**.
+
+**When resuming:**
+- **The design thread's 3B doc becomes the parent of the spec** (`datasec-new-feature` §1). Read it fully first.
+- The doc may already answer some of the questions below, so check them against it and don't ask anything it settles. These questions are the likeliest to be covered:
+  - Q5 (are observability stores `memory:write`?)
+  - Q7 (prompt-injection stance)
+  - Q8 (who owns the pipeline under Via)
+- **If the doc contradicts D1 or D2,** don't silently pick one side. Show the user both and let them decide, because D1 and D2 were their decisions.
+- **Check what the 3A Via thread handed back** (`git -C ~/PycharmProjects/via-skelton log`, read-only). It affects Q8.
+
+Then invoke `superpowers:brainstorming` and resume at the first question the doc leaves open. If the doc answers none, that is **Q3**. Do **not** re-ask D1 or D2.
 
 ## Decisions made (user, 2026-10-15/16)
 
