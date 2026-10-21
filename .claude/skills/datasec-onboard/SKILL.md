@@ -14,7 +14,7 @@ First line of your first reply: `[YYYY-MM-DD] <one-line context>`.
 1. Memory: `datasec-build-status.md` (phases, merge/push state, **declined items**, run conventions).
 2. **`docs_to_claude/` — gitignored, so `git log` cannot show it.** The user drops design-thread docs here (new specs, rulings, revised DESIGN.md). List newest first and read anything newer than the latest report:
    `ls -lt docs_to_claude/*/ | head -20`
-3. Latest `reports/*.md` (what the design thread was told) and open specs/plans in `docs/superpowers/`.
+3. The latest report, which is what the design thread was told: `ls -t reports/*.md reports/*/*.md | head -3`. Since 2026-10-17 there is one folder per feature, `reports/<feature>/`. and open specs/plans in `docs/superpowers/`.
 4. **Paused designs: `docs/superpowers/brainstorms/*.md`.** A file marked `PAUSED` is a brainstorm a previous thread stopped mid-way. Its decisions are made, so don't re-ask them. Resume at the step and the next question it names. Treat its file:line facts about external repos as dated, and re-check them read-only before relying on them.
 
 ## 2. Verify state mechanically — never trust memory's numbers
