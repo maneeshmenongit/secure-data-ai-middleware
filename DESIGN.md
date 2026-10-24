@@ -241,3 +241,9 @@ Resolved items are marked **[resolved]**; the rest stay open with an owner.
 - **10.10 What may drive a privileged agent action — [decided, 2026-10-16].** The existing `privileged_source_allowlist` (§10.5) is reused, and the core is unchanged. Structured market-data feeds are EXTERNAL with fixed source names, and the pilot allowlists them. Headlines and LLM output derived from them are UNTRUSTED and never allowlisted. A value derived from two allowlisted feeds needs a narrow, tested helper in the adapter, because `combine()` names the result `derived`. Rejected:
   - an "endorse to INTERNAL" validator, because it is a new declassification path
   - treating paper trades as `tool:readonly`, because that leaves the sink unguarded
+- **10.11 Host-written values on egress — [implemented, 2026-10-24].** The Via 3A trial showed egress redaction rewriting Via's own text: loopback IPs, `mem_<uuid>` ids (3.9% tripped a detector) and float costs (9.9% tripped CREDIT_CARD). The fixes:
+  - UUID-shaped ids that contain a hex letter, and bare decimal fractions of 9+ digits, are hidden from the SSN, card and phone detectors. This is opt-in per `Detector` (`skip_ids_and_fractions`), so custom detectors are unaffected.
+  - Loopback (127/8) and `0.0.0.0` are exempt from IPV4.
+  - The accepted cost is known gaps R2g.5–R2g.10: PII deliberately formatted as an id or a decimal.
+
+  Still open, owner the design thread (2026-10-24 report, Q1–Q4): private IP ranges (kept redacted for now), host-declared structured fields, epoch timestamps read as PHONE, and co-redacting a name next to a redacted email.
