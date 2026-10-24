@@ -265,3 +265,79 @@ def test_no_location_means_no_aggressive_rules(text):
 ])
 def test_sentence_ending_period_does_not_hide_numbers(text, raw):
     assert raw not in R.redact(text).payload
+
+
+# ---- Host-written text must survive egress (Via 3A trial false positives, 2026-10-24) ----
+
+VIA_MEM_ID = "mem_01a15cc8-8c5e-71bb-a771-3638710e24e6"
+
+
+@pytest.mark.parametrize("text", [
+    f"cite evidence {VIA_MEM_ID} exactly",
+    "id 01A15CC8-8C5E-71BB-A771-3638710E24E6 (upper case)",
+    "run 123e4567-e89b-12d3-a456-426614174000 done",
+    "ids 9f1c2b7a-1234-5678-9abc-555123456789, 3638710e-2222-4333-8444-123456789012",
+])
+def test_uuid_shaped_ids_are_not_redacted(text):
+    assert R.redact(text).payload == text
+
+
+def test_random_uuid4_ids_are_never_redacted():
+    import random
+    import uuid
+
+    rng = random.Random(1)
+    ids = [f"mem_{uuid.UUID(int=rng.getrandbits(128), version=4)}" for _ in range(3000)]
+    assert [i for i in ids if R.redact(i).payload != i] == []
+
+
+@pytest.mark.parametrize("text", [
+    "cost $0.4111111111111111",
+    "spent 12.4111111111111111 USD",
+    "delta -0.4111111111111111",
+    "ratio 0.123456789",
+    "rate 0.5551234567 per call",
+])
+def test_digits_after_a_decimal_point_are_not_pii(text):
+    assert R.redact(text).payload == text
+
+
+def test_random_float_costs_are_never_redacted():
+    import random
+
+    rng = random.Random(2)
+    costs = [f"cost ${rng.random() * rng.choice([1, 0.01, 0.0001])!r}" for _ in range(3000)]
+    assert [c for c in costs if R.redact(c).payload != c] == []
+
+
+@pytest.mark.parametrize("text", [
+    "no `requests` to 127.0.0.1. This environment blocks loopback",
+    "bind 0.0.0.0:8000",
+    "also 127.255.10.3 and 127.0.1.1",
+])
+def test_loopback_and_unspecified_ips_are_not_redacted(text):
+    assert R.redact(text).payload == text
+
+
+@pytest.mark.parametrize("ip", ["10.0.0.5", "192.168.1.1", "172.16.0.9", "8.8.8.8", "0.0.0.1", "128.0.0.1"])
+def test_other_ips_are_still_redacted(ip):
+    assert R.redact(f"host {ip} up").payload == "host [IPV4] up"
+
+
+@pytest.mark.parametrize("text,raw", [
+    (f"{VIA_MEM_ID} card 4111 1111 1111 1111", "4111 1111 1111 1111"),
+    (f"{VIA_MEM_ID} ssn 123-45-6789", "123-45-6789"),
+    (f"call 555-123-4567 re {VIA_MEM_ID}", "555-123-4567"),
+    (f"{VIA_MEM_ID}:4111111111111111", "4111111111111111"),
+    ("1. 123-45-6789", "123-45-6789"),
+    ("total: 4111111111111111.", "4111111111111111"),
+    # No hex letter: an all-digit dashed run is a number, not an id, so it is still scanned.
+    ("41111111-1111-1111-1111-111111111111", "41111111-1111-1111"),
+])
+def test_real_pii_next_to_ids_and_decimals_is_still_redacted(text, raw):
+    assert raw not in R.redact(text).payload
+
+
+def test_location_linking_leaves_ids_intact():
+    out = R.redact(f"I live at 145 Main St, NJ 07922, ref {VIA_MEM_ID}").payload
+    assert out == f"I live at [ADDRESS], ref {VIA_MEM_ID}"
