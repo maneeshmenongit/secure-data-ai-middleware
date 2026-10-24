@@ -56,6 +56,9 @@ class Detector:
     pattern: re.Pattern[str]
     validate: Callable[[str], bool] | None = None
     group: int = 0  # redact only this capture group (keyword context stays readable)
+    # Scan a copy with UUID-shaped ids and long decimal fractions hidden (see _mask_host_numbers).
+    # Off by default, so custom detectors see the text as written.
+    skip_ids_and_fractions: bool = False
 
 
 # Every pattern is anchored by a lookbehind and uses bounded repeats, so each
@@ -82,25 +85,35 @@ def _is_routable_ipv4(match: str) -> bool:
     return not (match.split(".", 1)[0] == "127" or match == "0.0.0.0")
 
 
-# A digit run that starts right after "<digit>." is a decimal fraction (a cost, a ratio),
-# not an SSN, card or phone number. Two fixed-width lookbehinds, so still linear.
-_NOT_AFTER = r"(?<!\d)(?<!\d\.)"
-
 # UUID-shaped ids (8-4-4-4-12 hex). Their digit groups trip SSN/PHONE/card patterns, so
-# their hex is hidden from the detectors (same length, so offsets hold). Only tokens with
+# their hex is hidden from those detectors (same length, so offsets hold). Only tokens with
 # a hex letter count: an all-digit dashed run is a number and is still scanned.
 _UUID = re.compile(
-    r"(?<![0-9A-Fa-f-])[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f-])"
+    r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
 )
 _HEX = re.compile(r"[0-9A-Fa-f]")
+_HEX_LETTER = re.compile(r"[A-Fa-f]")
+# The digits of a decimal fraction long enough to hold an SSN, phone or card (9+): a cost or
+# a ratio. A fraction has no separators, so "2.123-45-6789" (list numbering) is still scanned.
+_FRACTION = re.compile(r"(?<![\d.])\d{1,20}\.(\d{9,30})(?!\d|\.\d)")
 
 
 def _mask_ids(text: str) -> str:
     def mask(m: re.Match[str]) -> str:
         token = m.group()
-        return _HEX.sub("x", token) if re.search(r"[A-Fa-f]", token) else token
+        return _HEX.sub("x", token) if _HEX_LETTER.search(token) else token
 
     return _UUID.sub(mask, text)
+
+
+def _mask_host_numbers(text: str) -> str:
+    """Ids and long fractions that hosts write themselves, hidden from the digit detectors."""
+    def mask(m: re.Match[str]) -> str:
+        start, end = m.span(1)
+        return m.group()[: start - m.start()] + "x" * (end - start)
+
+    return _FRACTION.sub(mask, _mask_ids(text))
+
 
 DEFAULT_DETECTORS: tuple[Detector, ...] = (
     # Self-introductions: "my name is Maneesh", "I'm Priya Raman". The name must be capitalised.
@@ -155,20 +168,28 @@ DEFAULT_DETECTORS: tuple[Detector, ...] = (
         ),
     ),
     # Dots only as a matched pair (123.45.6789), so decimals like 123.456789 don't match.
-    Detector("SSN", re.compile(_NOT_AFTER + r"\d{3}(?:[- ]?\d{2}[- ]?|\.\d{2}\.)\d{4}(?!\d)")),
-    Detector("CREDIT_CARD", re.compile(_NOT_AFTER + r"(?:\d[ -]?){12,18}\d(?!\d)"), luhn_valid),
+    Detector("SSN", re.compile(r"(?<!\d)\d{3}(?:[- ]?\d{2}[- ]?|\.\d{2}\.)\d{4}(?!\d)"),
+             skip_ids_and_fractions=True),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
     # Exact card layouts, for when the loose match above swallowed a neighbouring
     # number (CVV, reference) and failed Luhn. Each is linear, like the rest.
-    Detector("CREDIT_CARD", re.compile(_NOT_AFTER + r"\d{13,19}(?!\d)"), luhn_valid),
-    Detector("CREDIT_CARD", re.compile(_NOT_AFTER + r"\d{4}(?:[ -]\d{4}){3}(?!\d)"), luhn_valid),
-    Detector("CREDIT_CARD", re.compile(_NOT_AFTER + r"\d{4}[ -]\d{6}[ -]\d{5}(?!\d)"), luhn_valid),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{13,19}(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}(?:[ -]\d{4}){3}(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}[ -]\d{6}[ -]\d{5}(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
     Detector(
         "PHONE",
         re.compile(
-            r"(?<![\d+])(?<!\d\.)(?:\+?1[ .-]?)?(?:\(\d{3}\)|\d{3})[ .-]?\d{3}[ .-]?\d{4}(?!\d)"
+            r"(?<![\d+])(?:\+?1[ .-]?)?(?:\(\d{3}\)|\d{3})[ .-]?\d{3}[ .-]?\d{4}(?!\d)"
         ),
+        skip_ids_and_fractions=True,
     ),
-    Detector("IPV4", re.compile(rf"(?<![\d.])(?:{_OCTET}\.){{3}}{_OCTET}(?!\.?\d)"), _is_routable_ipv4),
+    Detector(
+        "IPV4", re.compile(rf"(?<![\d.])(?:{_OCTET}\.){{3}}{_OCTET}(?!\.?\d)"), _is_routable_ipv4
+    ),
 )
 
 
@@ -274,15 +295,21 @@ class Redactor:
         """Regex redaction. Also returns where each placeholder sits in the output, so a
         later pass knows exactly which brackets are ours (not user-written look-alikes)."""
         text = normalize(text)
-        scanned = _mask_ids(text)
+        masked: str | None = None
         claimed = bytearray(len(text))
         spans: list[tuple[int, int, str]] = []
         for det in self.detectors:
+            if getattr(det, "skip_ids_and_fractions", False):
+                masked = _mask_host_numbers(text) if masked is None else masked
+                scanned = masked
+            else:
+                scanned = text
             for m in det.pattern.finditer(scanned):
                 start, end = m.span(det.group)
                 if any(claimed[start:end]):
                     continue
-                if det.validate is not None and not det.validate(m.group(det.group)):
+                # Validators see the real text, never the masked copy.
+                if det.validate is not None and not det.validate(text[start:end]):
                     continue
                 claimed[start:end] = b"\x01" * (end - start)
                 spans.append((start, end, det.label))

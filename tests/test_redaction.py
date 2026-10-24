@@ -341,3 +341,43 @@ def test_real_pii_next_to_ids_and_decimals_is_still_redacted(text, raw):
 def test_location_linking_leaves_ids_intact():
     out = R.redact(f"I live at 145 Main St, NJ 07922, ref {VIA_MEM_ID}").payload
     assert out == f"I live at [ADDRESS], ref {VIA_MEM_ID}"
+
+
+@pytest.mark.parametrize("text,raw", [
+    # Compact list numbering and similar "<digit>." prefixes: a fraction never has separators.
+    ("2.123-45-6789", "123-45-6789"),
+    ("items: 1.John 2.123-45-6789 3.done", "123-45-6789"),
+    ("Step 3.555-123-4567", "555-123-4567"),
+    ("I am 25.555-123-4567 is my cell", "555-123-4567"),
+    ("2.(555) 123-4567", "123-4567"),
+    ("2.+15551234567", "5551234567"),
+    ("127.555.123.4567", "555.123.4567"),
+    ("9.123 45 6789", "123 45 6789"),
+    ("v2.0.123-45-6789", "123-45-6789"),
+    ("ref 3.4111-1111-1111-1111", "4111-1111-1111-1111"),
+    ("0.4111 1111 1111 1111", "4111 1111 1111 1111"),
+    ("dotted ssn 123.45.6789", "123.45.6789"),
+])
+def test_pii_right_after_a_digit_and_dot_is_still_redacted(text, raw):
+    assert raw not in R.redact(text).payload
+
+
+@pytest.mark.parametrize("text", [
+    f"{VIA_MEM_ID}-v2",
+    f"pair {VIA_MEM_ID}-01a15cc8-8c5e-71bb-a771-3638710e24e6 joined",
+])
+def test_dash_joined_ids_are_not_redacted(text):
+    assert R.redact(text).payload == text
+
+
+def test_custom_detectors_still_see_ids_and_get_the_real_text():
+    import re
+
+    from datasec.redaction import Detector
+
+    seen = []
+    uuid_re = r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
+    r = Redactor([Detector("PATIENT_ID", re.compile(uuid_re), lambda m: seen.append(m) or True)])
+    out = r.redact("patient 3f2a9c1e-77b0-4c1d-9e2f-0a1b2c3d4e5f admitted").payload
+    assert out == "patient [PATIENT_ID] admitted"
+    assert seen == ["3f2a9c1e-77b0-4c1d-9e2f-0a1b2c3d4e5f"]
