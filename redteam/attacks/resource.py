@@ -67,4 +67,7 @@ ATTACKS = [
            _many_short_strings, "blocked", requires="presidio_analyzer"),
     Attack("R6.11", "resource_abuse", "LLM10", "1 MB of keyword-led account numbers and coordinates",
            _timed("account number is 12345 lat 12.3456 " * 27_000), "bounded"),
+    Attack("R6.12", "resource_abuse", "LLM10", "1 MB of UUID-shaped ids, near-misses and decimals",
+           _timed("01a15cc8-8c5e-71bb-a771-3638710e24e6 " * 13_500 + "a1b2c3d4-" * 55_000
+                  + "0.4111111111111111 " * 26_000), "bounded"),
 ]
