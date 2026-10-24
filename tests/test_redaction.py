@@ -333,6 +333,10 @@ def test_other_ips_are_still_redacted(ip):
     ("total: 4111111111111111.", "4111111111111111"),
     # No hex letter: an all-digit dashed run is a number, not an id, so it is still scanned.
     ("41111111-1111-1111-1111-111111111111", "41111111-1111-1111"),
+    # PII glued to the front of an id: the id must not swallow its last group.
+    ("call 555-123-4567abcd-1234-1234-1234-123456789012", "555-123-4567"),
+    ("ssn 123-45-6789abcd-1234-1234-1234-123456789012", "123-45-6789"),
+    ("card 4111-1111-1111-1111abcd-1234-1234-1234-123456789012", "4111-1111-1111-1111"),
 ])
 def test_real_pii_next_to_ids_and_decimals_is_still_redacted(text, raw):
     assert raw not in R.redact(text).payload
@@ -365,6 +369,7 @@ def test_pii_right_after_a_digit_and_dot_is_still_redacted(text, raw):
 @pytest.mark.parametrize("text", [
     f"{VIA_MEM_ID}-v2",
     f"pair {VIA_MEM_ID}-01a15cc8-8c5e-71bb-a771-3638710e24e6 joined",
+    "mem-01a15cc8-8c5e-71bb-a771-3638710e24e6",
 ])
 def test_dash_joined_ids_are_not_redacted(text):
     assert R.redact(text).payload == text

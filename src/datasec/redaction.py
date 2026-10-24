@@ -87,14 +87,18 @@ def _is_routable_ipv4(match: str) -> bool:
 
 # UUID-shaped ids (8-4-4-4-12 hex). Their digit groups trip SSN/PHONE/card patterns, so
 # their hex is hidden from those detectors (same length, so offsets hold). Only tokens with
-# a hex letter count: an all-digit dashed run is a number and is still scanned.
+# a hex letter count: an all-digit dashed run is a number and is still scanned. A leading
+# "-" is allowed only after another id or a non-digit ("mem-<id>", "<id>-<id>"), so a
+# dashed SSN/phone/card glued to an id ("555-123-4567abcd-…") keeps its last group.
 _UUID = re.compile(
-    r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
+    r"(?:(?<![0-9A-Fa-f-])|(?<=[0-9A-Fa-f]{12}-)|(?<=[^0-9-]-))"
+    r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
 )
 _HEX = re.compile(r"[0-9A-Fa-f]")
 _HEX_LETTER = re.compile(r"[A-Fa-f]")
 # The digits of a decimal fraction long enough to hold an SSN, phone or card (9+): a cost or
-# a ratio. A fraction has no separators, so "2.123-45-6789" (list numbering) is still scanned.
+# a ratio. Only a bare run of 9+ digits after "<digit>." is hidden, so "2.123-45-6789" (list
+# numbering) is still scanned; whatever follows that run is not checked (known gaps R2g.8-10).
 _FRACTION = re.compile(r"(?<![\d.])\d{1,20}\.(\d{9,30})(?!\d|\.\d)")
 
 
