@@ -372,12 +372,17 @@ def _link_pass(text: str, label: str, pattern: re.Pattern[str], found: Counter[s
     pieces = _UUID_SPLIT.split(text) if "-" in text else [text]
     if len(pieces) > 1 and not all(map(_HEX_LETTER.search, pieces[1::2])):
         # Only tokens with a hex letter are ids; fold all-digit look-alikes back into the text.
-        merged = [pieces[0]]
+        # Collect each stretch as parts and join once: "+=" on a list slot copies, so a run
+        # of look-alikes would be quadratic (red-team R6.14).
+        merged: list[str] = []
+        stretch = [pieces[0]]
         for i in range(1, len(pieces), 2):
             if _HEX_LETTER.search(pieces[i]):
-                merged += [pieces[i], pieces[i + 1]]
+                merged += ["".join(stretch), pieces[i]]
+                stretch = [pieces[i + 1]]
             else:
-                merged[-1] += pieces[i] + pieces[i + 1]
+                stretch += [pieces[i], pieces[i + 1]]
+        merged.append("".join(stretch))
         pieces = merged
     if len(pieces) == 1:
         out, n = pattern.subn(f"[{label}]", text)

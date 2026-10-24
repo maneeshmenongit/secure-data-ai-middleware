@@ -73,4 +73,6 @@ ATTACKS = [
     Attack("R6.13", "resource_abuse", "LLM10", "1 MB of ids beside an address (location linking's id-safe path)",
            _timed("145 Main St, NJ 07922 01a15cc8-8c5e-71bb-a771-3638710e24e6 zip 12345 lat 12.3456 " * 12_500),
            "bounded"),
+    Attack("R6.14", "resource_abuse", "LLM10", "1 MB of all-digit UUID look-alikes beside an address (fold-back path)",
+           _timed("145 Main St, NJ 07922 " + "29141777-6317-0669-0743-915000806360 " * 26_500), "bounded"),
 ]
