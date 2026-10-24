@@ -70,4 +70,7 @@ ATTACKS = [
     Attack("R6.12", "resource_abuse", "LLM10", "1 MB of UUID-shaped ids, near-misses and decimals",
            _timed("01a15cc8-8c5e-71bb-a771-3638710e24e6 " * 13_500 + "a1b2c3d4-" * 55_000
                   + "0.4111111111111111 " * 26_000), "bounded"),
+    Attack("R6.13", "resource_abuse", "LLM10", "1 MB of ids beside an address (location linking's id-safe path)",
+           _timed("145 Main St, NJ 07922 01a15cc8-8c5e-71bb-a771-3638710e24e6 zip 12345 lat 12.3456 " * 12_500),
+           "bounded"),
 ]

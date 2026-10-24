@@ -386,3 +386,17 @@ def test_custom_detectors_still_see_ids_and_get_the_real_text():
     out = r.redact("patient 3f2a9c1e-77b0-4c1d-9e2f-0a1b2c3d4e5f admitted").payload
     assert out == "patient [PATIENT_ID] admitted"
     assert seen == ["3f2a9c1e-77b0-4c1d-9e2f-0a1b2c3d4e5f"]
+
+
+def test_location_linking_counts_only_labels_it_found():
+    # A zero count must not appear: the pipeline treats any tally entry as "pii found".
+    assert R.redact("I live at 145 Main St").found == {"ADDRESS": 1}
+
+
+def test_location_linking_is_the_same_when_every_separator_is_taken():
+    from datasec.redaction import _SEPARATORS
+
+    taken = "".join(_SEPARATORS)
+    text = f"I live at 145 Main St, NJ 07922, ref {VIA_MEM_ID}-12345 zip 12345"
+    assert R.redact(taken + text).payload == taken + R.redact(text).payload
+    assert R.redact(text).payload == f"I live at [ADDRESS], ref {VIA_MEM_ID}-[ZIP_CODE] zip [ZIP_CODE]"

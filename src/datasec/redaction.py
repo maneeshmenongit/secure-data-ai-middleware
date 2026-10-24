@@ -91,6 +91,7 @@ def _is_routable_ipv4(match: str) -> bool:
 # "-" is allowed only after another id or a non-digit ("mem-<id>", "<id>-<id>"), so a
 # dashed SSN/phone/card glued to an id ("555-123-4567abcd-…") keeps its last group.
 _UUID = re.compile(
+    r"(?=[0-9A-Fa-f]{8}-)"  # cheap pre-check first: rejects most positions before the lookbehinds
     r"(?:(?<![0-9A-Fa-f-])|(?<=[0-9A-Fa-f]{12}-)|(?<=[^0-9-]-))"
     r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
 )
@@ -103,6 +104,9 @@ _FRACTION = re.compile(r"(?<![\d.])\d{1,20}\.(\d{9,30})(?!\d|\.\d)")
 
 
 def _mask_ids(text: str) -> str:
+    if "-" not in text:  # every id has dashes; skip the scan for the common case
+        return text
+
     def mask(m: re.Match[str]) -> str:
         token = m.group()
         return _HEX.sub("x", token) if _HEX_LETTER.search(token) else token
@@ -353,18 +357,58 @@ _ADDRESS_RUN = re.compile(
 )
 
 
+_UUID_SPLIT = re.compile(f"({_UUID.pattern})")
+# Private-use characters: never produced by a detector and never matched by a linking pattern.
+_SEPARATORS = [chr(cp) for cp in range(0xE000, 0xE010)]
+
+
+def _link_pass(text: str, label: str, pattern: re.Pattern[str], found: Counter[str]) -> str:
+    """One linking pattern over the text, never inside an id.
+
+    The stretches between ids are joined with "x<sep>x" and substituted in one call: the "x"
+    stands in for the neighbouring (masked) id, so lookarounds and \\b see a word character
+    there, and <sep> stops a match from spanning two stretches. No pattern matches "x" or
+    <sep>, so splitting on the separator gives the stretches back."""
+    pieces = _UUID_SPLIT.split(text) if "-" in text else [text]
+    if len(pieces) > 1 and not all(map(_HEX_LETTER.search, pieces[1::2])):
+        # Only tokens with a hex letter are ids; fold all-digit look-alikes back into the text.
+        merged = [pieces[0]]
+        for i in range(1, len(pieces), 2):
+            if _HEX_LETTER.search(pieces[i]):
+                merged += [pieces[i], pieces[i + 1]]
+            else:
+                merged[-1] += pieces[i] + pieces[i + 1]
+        pieces = merged
+    if len(pieces) == 1:
+        out, n = pattern.subn(f"[{label}]", text)
+    else:
+        sep = next((c for c in _SEPARATORS if c not in text), None)
+        if sep is None:  # the text already uses every separator: link stretch by stretch
+            return _link_slow(pieces, label, pattern, found)
+        joint = "x" + sep + "x"
+        out, n = pattern.subn(f"[{label}]", joint.join(pieces[0::2]))
+        pieces[0::2] = out.split(joint)
+        out = "".join(pieces)
+    if n:
+        found[label] += n
+    return out
+
+
+def _link_slow(pieces: list[str], label: str, pattern: re.Pattern[str], found: Counter[str]) -> str:
+    last = len(pieces) - 1
+    for i in range(0, len(pieces), 2):
+        lead, tail = ("x" if i else ""), ("x" if i < last else "")
+        stretch, n = pattern.subn(f"[{label}]", lead + pieces[i] + tail)
+        if n:
+            found[label] += n
+        pieces[i] = stretch[len(lead) : len(stretch) - len(tail)]
+    return "".join(pieces)
+
+
 def link_locations(text: str, found: Counter[str]) -> str:
     if not _LOCATION_PLACEHOLDER.search(text):
         return text
     for label, pattern in _LINKED:
-        # Match on the id-masked copy, replace in the real text: ids keep their digits.
-        spans = [m.span() for m in pattern.finditer(_mask_ids(text))]
-        if spans:
-            found[label] += len(spans)
-            parts, pos = [], 0
-            for start, end in spans:
-                parts += [text[pos:start], f"[{label}]"]
-                pos = end
-            text = "".join(parts) + text[pos:]
+        # Ids are found again on every pass: a replacement can free an id's boundary.
+        text = _link_pass(text, label, pattern, found)
     return _ADDRESS_RUN.sub("[ADDRESS]", text)
-
