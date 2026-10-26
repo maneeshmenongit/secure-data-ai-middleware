@@ -3,7 +3,7 @@
 **Status:** PAUSED at brainstorming checklist step 3 (clarifying questions). Two decisions made. No spec, no plan, no code yet.
 **Path:** architectural (new adapter module here + an external pilot) — full spec → plan → Native execution → whole-branch review.
 **Branch:** `feat/langgraph-adapter` (no commits of its own yet; same as `master` when paused).
-**ON HOLD (user, 2026-10-17)** until **both** of these are true:
+**ON HOLD.** The two conditions below are now **both met**; 3B waits only for the provenance-gate cycle (see the status update). Originally on hold (user, 2026-10-17) until **both** of these were true:
 1. **The Via 3A handoff has been run.** The user runs `docs/handoffs/2026-10-05-PROMPT_via_datasec_3A.md` in a via-skelton thread.
 2. **The design thread's 3B doc is in `docs_to_claude/`.** The design thread wrote a 3B design after reading `reports/2026-10-16-phase3-progress-report.md`, and the user will drop it there.
 
@@ -19,6 +19,22 @@ Work resumes in a **new thread**.
 - **Check what the 3A Via thread handed back** (`git -C ~/PycharmProjects/via-skelton log`, read-only). It affects Q8.
 
 Then invoke `superpowers:brainstorming` and resume at the first question the doc leaves open. If the doc answers none, that is **Q3**. Do **not** re-ask D1 or D2.
+
+## Status update, 2026-10-25
+- **3A is closed on DataSec's side.**
+  - Via has run it twice.
+  - The egress false-positive fix is merged (`a8baacc`).
+  - Via is re-pinned to `1a1eb54`.
+  - Still open, on Via's side and the principal's: flipping `tool:privileged` and `memory:write` from shadow to enforce once the shadow data has been reviewed.
+- **Design-thread input for 3B has arrived:** `docs_to_claude/design/phase3/2026-10-17-design-thread-input-3B.md`. It is the 3B spec's parent, so read it fully. Its answers:
+  - **Q5 (observability stores):** out of scope **only if they are never read back** into a prompt or a decision. Define this by behaviour, not by name, and put that test in the design.
+  - **Q7 (prompt injection):** taint on the output is enough. No delimiting of untrusted spans now; record it as a future option.
+  - **Q8 (pipeline ownership):** **inject** the pipeline and audit log from Via's 3A profile, one of each per project. Build a default only when running standalone.
+  - **New design goal:** the adapter is the **only** place trust is assigned, which closes R1g.1. Add a test that a node cannot raise a field's trust.
+  - It also says to defer 3C, keep the external harness out of this repo, and keep the audit anchor deferred.
+- **3B now comes after the provenance-gated egress cycle** (user, 2026-10-25). That cycle changes what the `llm` sink means for every adapter.
+  - It is expected to add per-part provenance on egress payloads. The 3B per-field labels should reuse that mechanism.
+  - When 3B resumes, start from that cycle's spec, then this file, then the design doc. Q3 (where labels travel) may already be answered by it.
 
 ## Decisions made (user, 2026-10-15/16)
 
