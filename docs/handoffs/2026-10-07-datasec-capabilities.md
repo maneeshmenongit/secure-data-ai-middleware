@@ -1,6 +1,6 @@
 # DataSec — what the security middleware does (one page)
 
-**Status:** 2026-10-07 · repo `secure-data-ai-middleware` · Via integration pinned at `cf62c48` · 434 tests, 87 red-team attacks (79 defended, 8 documented gaps, 0 unexpected)
+**Status:** 2026-10-07, updated 2026-10-24 · repo `secure-data-ai-middleware` · Via integration pinned at `cf62c48`, with a re-pin pending for the egress false-positive fix · 491 tests, 101 red-team attacks (87 defended, 14 documented gaps, 0 unexpected)
 
 ## In one sentence
 A stdlib-only Python layer that sits at every point where an AI system's data **leaves or acts**: prompts to an LLM, tool calls, memory writes, third-party calls and HTTP responses. Each such point calls `guard()`. Each call returns **allow**, **redact** or **deny**, based on *where the data came from*, and leaves a tamper-evident audit record.
@@ -36,12 +36,13 @@ check(pipeline, Action(sink, name, provenance), payload, Mode.ENFORCE)   # -> sa
 - **Errors safe to log.** `Blocked` errors carry only redacted text, so a host can store them.
 
 ## Evidence
-- Every control ships with unit tests **and** a red-team attack. The current suite has 87 attacks; each one fails if its control is removed.
-- Five whole-branch security reviews (Phase 1, Phase 2, NER, demo console, 3A) found and fixed **3 critical and 22 important** issues, each with a regression test.
+- Every control ships with unit tests **and** a red-team attack. The current suite has 101 attacks; each one fails if its control is removed.
+- Six whole-branch security reviews (Phase 1, Phase 2, NER, demo console, 3A, the egress false-positive fix) found and fixed **4 critical and 25 important** issues, each with a regression test.
 
 ## Known limits (documented, tested as open gaps)
 - **Hand-built trust.** Code that hand-builds `TRUSTED` provenance is trusted. Mitigation: only the integration's boundary assigns trust.
-- **PII the patterns can't see.** PII spelled out in words, split across list items, or names when NER isn't installed.
+- **PII the patterns can't see.** This covers PII spelled out in words, PII split across list items, names when NER isn't installed, and (since 2026-10-24) PII deliberately formatted as a UUID or a long decimal fraction. Ids and costs that hosts write themselves must pass untouched, so those shapes are exempt.
+- **Redaction hides a value, not a value that can be guessed.** If a person's name stays visible, a model can rebuild their redacted email (`Jane Tester, [EMAIL]`). Install NER wherever names matter.
 - **Audit truncation without an anchor.** If no checkpoint is configured, truncation goes undetected. If an attacker can replay an old checkpoint, it does too. That needs an external, forward-only anchor, which is an open decision.
 - **Shadow data needed.** Tool and memory enforcement thresholds need tuning from real shadow data before they are switched on.
 

@@ -56,6 +56,9 @@ class Detector:
     pattern: re.Pattern[str]
     validate: Callable[[str], bool] | None = None
     group: int = 0  # redact only this capture group (keyword context stays readable)
+    # Scan a copy with UUID-shaped ids and long decimal fractions hidden (see _mask_host_numbers).
+    # Off by default, so custom detectors see the text as written.
+    skip_ids_and_fractions: bool = False
 
 
 # Every pattern is anchored by a lookbehind and uses bounded repeats, so each
@@ -74,6 +77,51 @@ _NOT_NAMES = frozenset(
 
 def _is_name(match: str) -> bool:
     return match.split()[0] not in _NOT_NAMES
+
+
+def _is_routable_ipv4(match: str) -> bool:
+    """Loopback (127/8) and the unspecified address identify no one; hosts write them in
+    their own instructions. Private ranges still map an internal network, so they stay."""
+    return not (match.split(".", 1)[0] == "127" or match == "0.0.0.0")
+
+
+# UUID-shaped ids (8-4-4-4-12 hex). Their digit groups trip SSN/PHONE/card patterns, so
+# their hex is hidden from those detectors (same length, so offsets hold). Only tokens with
+# a hex letter count: an all-digit dashed run is a number and is still scanned. A leading
+# "-" is allowed only after another id or a non-digit ("mem-<id>", "<id>-<id>"), so a
+# dashed SSN/phone/card glued to an id ("555-123-4567abcd-…") keeps its last group.
+_UUID = re.compile(
+    r"(?=[0-9A-Fa-f]{8}-)"  # cheap pre-check first: rejects most positions before the lookbehinds
+    r"(?:(?<![0-9A-Fa-f-])|(?<=[0-9A-Fa-f]{12}-)|(?<=[^0-9-]-))"
+    r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])"
+)
+_HEX = re.compile(r"[0-9A-Fa-f]")
+_HEX_LETTER = re.compile(r"[A-Fa-f]")
+# The digits of a decimal fraction long enough to hold an SSN, phone or card (9+): a cost or
+# a ratio. Only a bare run of 9+ digits after "<digit>." is hidden, so "2.123-45-6789" (list
+# numbering) is still scanned; whatever follows that run is not checked (known gaps R2g.8-10).
+_FRACTION = re.compile(r"(?<![\d.])\d{1,20}\.(\d{9,30})(?!\d|\.\d)")
+
+
+def _mask_ids(text: str) -> str:
+    if "-" not in text:  # every id has dashes; skip the scan for the common case
+        return text
+
+    def mask(m: re.Match[str]) -> str:
+        token = m.group()
+        return _HEX.sub("x", token) if _HEX_LETTER.search(token) else token
+
+    return _UUID.sub(mask, text)
+
+
+def _mask_host_numbers(text: str) -> str:
+    """Ids and long fractions that hosts write themselves, hidden from the digit detectors."""
+    def mask(m: re.Match[str]) -> str:
+        start, end = m.span(1)
+        return m.group()[: start - m.start()] + "x" * (end - start)
+
+    return _FRACTION.sub(mask, _mask_ids(text))
+
 
 DEFAULT_DETECTORS: tuple[Detector, ...] = (
     # Self-introductions: "my name is Maneesh", "I'm Priya Raman". The name must be capitalised.
@@ -128,20 +176,28 @@ DEFAULT_DETECTORS: tuple[Detector, ...] = (
         ),
     ),
     # Dots only as a matched pair (123.45.6789), so decimals like 123.456789 don't match.
-    Detector("SSN", re.compile(r"(?<!\d)\d{3}(?:[- ]?\d{2}[- ]?|\.\d{2}\.)\d{4}(?!\d)")),
-    Detector("CREDIT_CARD", re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"), luhn_valid),
+    Detector("SSN", re.compile(r"(?<!\d)\d{3}(?:[- ]?\d{2}[- ]?|\.\d{2}\.)\d{4}(?!\d)"),
+             skip_ids_and_fractions=True),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
     # Exact card layouts, for when the loose match above swallowed a neighbouring
     # number (CVV, reference) and failed Luhn. Each is linear, like the rest.
-    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{13,19}(?!\d)"), luhn_valid),
-    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}(?:[ -]\d{4}){3}(?!\d)"), luhn_valid),
-    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}[ -]\d{6}[ -]\d{5}(?!\d)"), luhn_valid),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{13,19}(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}(?:[ -]\d{4}){3}(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
+    Detector("CREDIT_CARD", re.compile(r"(?<!\d)\d{4}[ -]\d{6}[ -]\d{5}(?!\d)"), luhn_valid,
+             skip_ids_and_fractions=True),
     Detector(
         "PHONE",
         re.compile(
             r"(?<![\d+])(?:\+?1[ .-]?)?(?:\(\d{3}\)|\d{3})[ .-]?\d{3}[ .-]?\d{4}(?!\d)"
         ),
+        skip_ids_and_fractions=True,
     ),
-    Detector("IPV4", re.compile(rf"(?<![\d.])(?:{_OCTET}\.){{3}}{_OCTET}(?!\.?\d)")),
+    Detector(
+        "IPV4", re.compile(rf"(?<![\d.])(?:{_OCTET}\.){{3}}{_OCTET}(?!\.?\d)"), _is_routable_ipv4
+    ),
 )
 
 
@@ -247,14 +303,21 @@ class Redactor:
         """Regex redaction. Also returns where each placeholder sits in the output, so a
         later pass knows exactly which brackets are ours (not user-written look-alikes)."""
         text = normalize(text)
+        masked: str | None = None
         claimed = bytearray(len(text))
         spans: list[tuple[int, int, str]] = []
         for det in self.detectors:
-            for m in det.pattern.finditer(text):
+            if getattr(det, "skip_ids_and_fractions", False):
+                masked = _mask_host_numbers(text) if masked is None else masked
+                scanned = masked
+            else:
+                scanned = text
+            for m in det.pattern.finditer(scanned):
                 start, end = m.span(det.group)
                 if any(claimed[start:end]):
                     continue
-                if det.validate is not None and not det.validate(m.group(det.group)):
+                # Validators see the real text, never the masked copy.
+                if det.validate is not None and not det.validate(text[start:end]):
                     continue
                 claimed[start:end] = b"\x01" * (end - start)
                 spans.append((start, end, det.label))
@@ -294,12 +357,63 @@ _ADDRESS_RUN = re.compile(
 )
 
 
+_UUID_SPLIT = re.compile(f"({_UUID.pattern})")
+# Private-use characters: never produced by a detector and never matched by a linking pattern.
+_SEPARATORS = [chr(cp) for cp in range(0xE000, 0xE010)]
+
+
+def _link_pass(text: str, label: str, pattern: re.Pattern[str], found: Counter[str]) -> str:
+    """One linking pattern over the text, never inside an id.
+
+    The stretches between ids are joined with "x<sep>x" and substituted in one call: the "x"
+    stands in for the neighbouring (masked) id, so lookarounds and \\b see a word character
+    there, and <sep> stops a match from spanning two stretches. No pattern matches "x" or
+    <sep>, so splitting on the separator gives the stretches back."""
+    pieces = _UUID_SPLIT.split(text) if "-" in text else [text]
+    if len(pieces) > 1 and not all(map(_HEX_LETTER.search, pieces[1::2])):
+        # Only tokens with a hex letter are ids; fold all-digit look-alikes back into the text.
+        # Collect each stretch as parts and join once: "+=" on a list slot copies, so a run
+        # of look-alikes would be quadratic (red-team R6.14).
+        merged: list[str] = []
+        stretch = [pieces[0]]
+        for i in range(1, len(pieces), 2):
+            if _HEX_LETTER.search(pieces[i]):
+                merged += ["".join(stretch), pieces[i]]
+                stretch = [pieces[i + 1]]
+            else:
+                stretch += [pieces[i], pieces[i + 1]]
+        merged.append("".join(stretch))
+        pieces = merged
+    if len(pieces) == 1:
+        out, n = pattern.subn(f"[{label}]", text)
+    else:
+        sep = next((c for c in _SEPARATORS if c not in text), None)
+        if sep is None:  # the text already uses every separator: link stretch by stretch
+            return _link_slow(pieces, label, pattern, found)
+        joint = "x" + sep + "x"
+        out, n = pattern.subn(f"[{label}]", joint.join(pieces[0::2]))
+        pieces[0::2] = out.split(joint)
+        out = "".join(pieces)
+    if n:
+        found[label] += n
+    return out
+
+
+def _link_slow(pieces: list[str], label: str, pattern: re.Pattern[str], found: Counter[str]) -> str:
+    last = len(pieces) - 1
+    for i in range(0, len(pieces), 2):
+        lead, tail = ("x" if i else ""), ("x" if i < last else "")
+        stretch, n = pattern.subn(f"[{label}]", lead + pieces[i] + tail)
+        if n:
+            found[label] += n
+        pieces[i] = stretch[len(lead) : len(stretch) - len(tail)]
+    return "".join(pieces)
+
+
 def link_locations(text: str, found: Counter[str]) -> str:
     if not _LOCATION_PLACEHOLDER.search(text):
         return text
     for label, pattern in _LINKED:
-        text, n = pattern.subn(f"[{label}]", text)
-        if n:
-            found[label] += n
+        # Ids are found again on every pass: a replacement can free an id's boundary.
+        text = _link_pass(text, label, pattern, found)
     return _ADDRESS_RUN.sub("[ADDRESS]", text)
-
