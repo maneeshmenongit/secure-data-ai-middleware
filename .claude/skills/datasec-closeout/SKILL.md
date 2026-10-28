@@ -37,5 +37,20 @@ Conversation context doesn't survive the thread, so write it down: `docs/superpo
 
 Once the spec is written, the spec supersedes the brainstorm file. Mark the file `SUPERSEDED by <spec path>`.
 
+## 3c. External projects: does this need a handoff?
+Check every merged change against the Via triggers in `datasec-new-feature` §5 (the API, the exception contract, egress redaction, audit format, privileged rules, speed, Presidio).
+- **If any trigger is hit, write the re-pin handoff before closing:** `docs/handoffs/YYYY-MM-DD-PROMPT_via_<topic>.md`.
+- Pin it to the full SHA of the code commit, and install that SHA into a throwaway venv in the scratchpad to prove it.
+- For the audit format, state whether an old log still verifies.
+- For speed, give the measured timings near the 1 MB cap.
+- Hand-backs from Via land in `docs_to_claude/handoff_from_via/`; read them first.
+
+## 3d. Prepare the next thread
+The next thread inherits only the record. Before the closing message:
+- **Memory.** It must name the single next step and every open user decision, such as pending pushes, merges, and branches kept for external pins. Branches kept for external pins (a SHA another repo installs) must never be squashed, rebased or deleted.
+- **In-flight work.** If something is in flight, a `PAUSED` brainstorm (§3b) or a plan must say exactly where to resume.
+- **Workspace.** Leave the working tree clean. Park empty feature branches at `master`. Leave untracked files the user put there alone, and mention them.
+- **Starter prompt.** End the closing message with a one-line starter prompt for the new thread, for example: `continue datasec — resume the paused <topic> brainstorm at <step>`. The `datasec-onboard` skill then finds the record.
+
 ## 4. Closing message
 Verified-state table · what shipped (commit refs) · honest tally incl. your own defects · rulings and deferred minors · what's next · separated: what only the user can do (push, merge, decisions). If something is unfinished, say so — it goes in the report and memory as unfinished.
