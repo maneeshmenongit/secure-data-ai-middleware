@@ -247,3 +247,9 @@ Resolved items are marked **[resolved]**; the rest stay open with an owner.
   - The accepted cost is known gaps R2g.5–R2g.10: PII deliberately formatted as an id or a decimal.
 
   Still open, owner the design thread (2026-10-24 report, Q1–Q4): private IP ranges (kept redacted for now), host-declared structured fields, epoch timestamps read as PHONE, and co-redacting a name next to a redacted email.
+- **10.12 Provenance-gated egress redaction — [in design, paused 2026-10-28].** The design thread's reframe (2026-10-25) is adopted. Egress redaction applies only to parts with trust ≤ USER. INTERNAL and TRUSTED parts are scanned and their findings recorded in the audit, but they are never rewritten.
+  - The gate needs **per-part provenance** inside one payload, because hosts guard whole prompts.
+  - The policy decision still uses the weakest trust and every label.
+  - Also in this cycle: narrowing the `1a1eb54` exemptions, with data; and location linking per-project opt-in, **on by default**. That keeps the user's 2026-10-02 all-or-nothing rule and differs from the design thread's Q7 default of off.
+  - Deferred: private-IP exemption on `llm` (Q1) and host-declared fields (Q2).
+  - The state is in `docs/superpowers/brainstorms/2026-10-28-datasec-provenance-gated-egress.md`. **3B follows this cycle.**
