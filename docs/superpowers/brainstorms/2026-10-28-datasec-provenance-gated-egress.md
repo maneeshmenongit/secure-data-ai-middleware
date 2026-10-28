@@ -6,6 +6,14 @@
 **Resume:** invoke `superpowers:brainstorming` and say "resuming the paused provenance-gated egress brainstorm at step 4". Re-read the inputs below, then propose approaches for **A1**. Do **not** re-ask D1 or D2.
 **Comes before 3B.** 3B's per-field labels should reuse this cycle's per-part mechanism. See `2026-10-16-datasec-langgraph-adapter.md`.
 
+## Via state (checked read-only, 2026-10-28)
+- **Merged on Via's `main`:**
+  - `feat/datasec-repin` (`0d0e30f`), which pins `1a1eb54`
+  - `1a8d633`, which stops Via reading `.git/`; that removes the 40-hex git-hash hits
+  - `feat/datasec-default-on` (`7c03c89`, the principal, 2026-10-28)
+- **DataSec is now on by default in Via.** So every Via prompt goes through egress redaction, and this cycle's change reaches all of Via's traffic once it re-pins.
+- The A1 lines in Via's bridge should be re-checked on `main` before they are cited in the spec.
+
 ## Inputs (read these first)
 - **The design thread's input:** `docs/superpowers/specs/Claude outputs/2026-10-25-design-thread-input-egress-fp.md`. The user left it untracked at that path.
   - **The reframe:** these false positives came from scanning trusted, system-written text. Redact on egress only when `trust <= USER`, and skip INTERNAL and TRUSTED. On top of that, make rewrites of high-trust text observable.
