@@ -1,6 +1,10 @@
 # [2026-10-28] Provenance-gated egress redaction: paused brainstorm
 
-**Status:** PAUSED at brainstorming checklist step 4 (propose 2–3 approaches). Two decisions are made. There is no spec, plan or code yet.
+**Status:** DESIGN APPROVED (2026-11-15). All five sections were approved in chat. The spec is `docs/superpowers/specs/2026-11-15-datasec-provenance-gated-egress-design.md` and is awaiting the user's review. Then come writing-plans and Native execution. Corrections made during the sections, all reflected in the spec:
+- Payloads with no parts are gated by the Action's own trust (spec §3.4).
+- SHADOW returns `unwrap(payload)`.
+- A `secret` part is caught by `part_labels`.
+- R5.17 was added, bringing the total to 121 attacks. There is no spec, plan or code yet.
 **Path:** architectural. It changes what `guard()` does on egress for every host, and it adds per-part provenance to the payload. So the route is spec → plan → Native execution → whole-branch review → a re-pin handoff for Via.
 **Branch:** `feat/provenance-gated-egress`. It has no commits of its own; it was reset to `master` when work paused.
 **Resume:** invoke `superpowers:brainstorming` and say "resuming the paused provenance-gated egress brainstorm at step 4". Re-read the inputs below, then propose approaches for **A1**. Do **not** re-ask D1 or D2.
@@ -51,6 +55,63 @@
 - **D2. Location-linking default: A, on by default (2026-10-28).** A project may opt out in its profile, but only deliberately. This keeps the user's 2026-10-02 all-or-nothing rule wherever nothing else was decided. The design thread's Q7 asked for the opposite default (off); **tell the design thread why**.
   - Reason: the trust gate removes the main source of over-redaction (a host's own data-heavy text, which is INTERNAL). What is still scanned is user, external and untrusted text, which is where addresses appear.
   - Rejected: B, off by default (the design thread's position). A user's "145 Main St, NJ 07922" would leave the ZIP and coordinates visible unless a project opted in.
+
+- **A1. Per-part provenance: (a), nested `Tainted` in the payload (2026-10-29).**
+  - The Action's provenance is the **default for untagged content**, not a ceiling. Tagged parts state their own trust.
+  - The decision uses `combine(action, every part)`: one decision and one audit entry per payload, and `secret` stays sticky.
+  - A nested part gets `min(inner, outer)`, so it can never raise its parent's trust.
+  - The output is unwrapped to plain values. Via's change is about 3 lines at `datasec_bridge.py:646-660` (`main` `7c03c89`): wrap each `m.content` in `Tainted(m.content, _msg_prov(st, m))`.
+  - Rejected: (b) a path-keyed provenance map on the Action (paths drift from the payload, and it adds an `Action` field); (c) `check_parts` (flat lists only, a second entry point).
+  - **Trap:** `_over_cap` counts an unknown object as 8 bytes without walking it (`pipeline.py:53`). It must walk into `Tainted`, or a large string wrapped in a part bypasses the 1 MB cap. Today `Redactor._walk` raises `UnsupportedPayload` on a `Tainted` (`redaction.py:282`), so an old pin denies a new-style payload (fails closed).
+- **A2. High-trust parts: regex-only scan, observed and never rewritten (option 1, 2026-10-29).**
+  - INTERNAL and TRUSTED parts are scanned by regex only: no NER, and nothing charged to the NER budget.
+  - Why: the Presidio budget (`presidio.py:85-87`, 20k characters per string, 50k in total) raises `RedactionError` → deny. A full scan could block a prompt just to observe it, or leave no NER budget for the user's text.
+  - A high-trust finding never adds the `pii` label, so it never turns the decision into REDACT.
+  - Accepted gap: a name in a mislabelled high-trust part is not observed (part of R1g.1).
+  - Rejected: a full scan with NER (budget denials, as slow as today); skipping entirely (no observability).
+- **A3. High-trust findings go in `extra`, as strings (option 1, 2026-10-29).**
+  - `extra["observed"] = "EMAIL=2,PHONE=1"`: detector labels with counts, sorted so the text is always the same.
+  - `extra["observed_sources"]`: the part sources that had findings, joined with `+` and passed through `_safe()`.
+  - Both keys appear only when something was observed, so entries without findings hash as before and old logs verify.
+  - **Rolling back is safe:** the old pin `1a1eb54` reads `extra` already, so it can read and verify a new log.
+  - `tally` stays "what was rewritten" (low-trust findings only). Via's `run_summary` (`datasec_bridge.py:773-779`, `main` `7c03c89`) counts `redactions.<label>` from `tally` when `effect == "redact"`.
+  - `datasec.report` gets a section "high-trust findings (sink / observed_sources)".
+  - Rejected: a top-level `observed` field (the old pin's `AuditEntry(**json)` raises `TypeError` on an unknown key, so Via would refuse to start after a rollback); nested values in `extra` (breaks the `dict[str, str]` contract).
+- **A4. Exemptions: keep the id and decimal masks for parts at EXTERNAL and above, switch them off for UNTRUSTED parts, and keep loopback (option 1, 2026-10-29).**
+  - This closes R2g.5–R2g.10 for attacker-reachable text (UNTRUSTED). For USER and EXTERNAL text they stay open as narrower, documented gaps.
+  - **Departs from D1:** the loopback exemption is *not* narrowed. It saves 0 hits in low-trust rows, and 127.0.0.1 identifies no one, so dropping it would buy nothing.
+  - Observation scans of high-trust parts (A2) keep the masks.
+  - **Measurement (2026-10-29, read-only):** about 25.8k memory rows in `via-data/projects/datasec-3a-trial{,2}/trial.db` and `via-data/CURRENT.db`, scanned with `Redactor()` at master, with trust from row provenance via Via's `TRUST_TABLE`. The script is throwaway; only shapes and domains were printed.
+    - Low-trust rows (USER/EXTERNAL): the id mask saves about 25 hits (`mem_<uuid>` in `principal`/`tool` rows), the decimal mask about 214 CREDIT_CARD (`repr(float)` costs in `tool` rows), and loopback 0. There are **no UNTRUSTED rows** (`web`/`repo:host`) in any store.
+    - INTERNAL rows: about 3,300 current rewrites stop under the gate. Most are false positives: `@app.get`/`@click.option` decorators read as EMAIL (about 2,000), git author-line epochs read as PHONE (about 740), hex runs read as SSN/PHONE (about 180).
+    - **One real class: 125 hits of `<user>@maneesh-mac-mini.local`**, which under the gate go unredacted and are observed.
+    - Expect the report's high-trust section to be dominated by decorator false positives until the EMAIL detector is tightened. That is a separate fix, not in this cycle.
+    - Caveat: these are rows, not assembled prompts, and `tool`+`llm_call` (INTERNAL in Via's `OWN_RECORDS`) could not be told apart, because the kind is not in `content`.
+- **A5. Location opt-out: a constructor flag `location_linking=True` on `Redactor` and `PresidioRedactor` (option 1, 2026-10-29).**
+  - It follows the `scan_integers`/`integer_fields` pattern. It isn't named `link_locations`, because that is the module function.
+  - All four call sites (`redaction.py:300`, `presidio.py:123/154/163`) check the one attribute.
+  - Via adds a profile key `location_linking` (true by default) to `PROFILE_KEYS` (`datasec_bridge.py:60`) and passes it where the redactor is built (`:353-360`). This goes in the handoff.
+  - Linking behaves the same in redaction and in observation scans, so ADDRESS counts mean the same in `tally` and in `extra["observed"]`.
+  - Rejected: a per-Action override (adds an `Action` field, and any single call could switch linking off, against D2's "only deliberately"); a per-part label (YAGNI).
+- **A6. Speed: a `Tainted` part counts as a container in `_over_cap` (2026-11-04).** Each part adds one depth level and a few bytes, like lists and dicts at `pipeline.py:45-52`, so the existing 1 MB / 200-level caps bound the walk. No new limit.
+  - New attacks, all timed against the 1 s limit:
+    - R6.15: 1 MB across ~100k mixed-trust parts → bounded
+    - R6.16: parts nested 201 deep → blocked ("payload too deep")
+    - R6.17: a 10 MB string inside one part, under the default cap → blocked
+    - R6.18 (Presidio): a 60k-character INTERNAL part next to a short USER part with a name → not denied, and the name is `[PERSON]`
+  - The handoff (Via item 6) reports the R6.15 and R6.18 timings.
+- **A7. Red team: 19 new attacks, 18 defended and 1 new gap; 101 → 120 attacks, 15 gaps (2026-11-07).**
+  - R1.10: a mislabelled INTERNAL part with PII is unchanged **and** recorded in `extra["observed"]`. This needs a new outcome, *observed*.
+  - R1.11: an untagged part inherits the Action's USER trust → redacted.
+  - R1.12: a `secret` part inside a payload that is otherwise INTERNAL → egress blocked.
+  - R1.13: a TRUSTED part nested inside an UNTRUSTED part → redacted.
+  - R1.14: INTERNAL plus an UNTRUSTED part sent to `tool:privileged` → blocked.
+  - R1g.2 (new gap): mislabelled high-trust PII leaves unredacted (it is observed, not prevented). R1g.1 gets a note that it now also skips redaction.
+  - R2.29–R2.34: the R2g.5–R2g.10 forms in UNTRUSTED parts → redacted. R2g.5–R2g.10 are reworded "in USER/EXTERNAL text".
+  - R4.14: a hostile part source (email, newline, ANSI codes) is passed through `_safe()` into `observed_sources` and escaped by `report.py`.
+  - R5.15: a part whose provenance isn't a `Provenance` → blocked. R5.16: a part with an unsupported value → blocked.
+  - R6.15–R6.18: as in A6.
+  - That old logs still verify is a regression **test** (fixture log from `1a1eb54`), not an attack.
 
 ## Questions still to settle (in order, with my leaning)
 - **A1. How a payload carries per-part provenance.** Propose these approaches next:
